@@ -1,0 +1,6 @@
+{
+  "name": "A.T.L.A.S. Core",
+  "description": "Núcleo de inteligencia artificial autónomo ATLAS Core con interfaz táctica HUD, visualizador holográfico 3D, búsqueda web en tiempo real, visión artificial, gestión de tareas y control multiplataforma.",
+  "requestFramePermissions": ["microphone", "camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
