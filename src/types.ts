@@ -2,7 +2,18 @@ export type AssistantTheme = 'cyan' | 'gold' | 'emerald';
 export type AssistantState = 'idle' | 'listening' | 'thinking' | 'searching' | 'executing' | 'speaking' | 'error' | 'offline';
 export type AssistantVoiceName = 'Atlas';
 
-export type GeminiModelOption = 'gemini-3.8-flash' | 'gemini-3.1-pro-preview' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';
+export type AIModelOption = 
+  | 'llama-3.3-70b-versatile'
+  | 'llama-3.1-8b-instant'
+  | 'gpt-4o-mini'
+  | 'gpt-4o'
+  | 'gemini-3.8-flash'
+  | 'gemini-3.1-pro-preview'
+  | 'gemini-3.1-flash-lite'
+  | 'gemini-flash-latest'
+  | string;
+
+export type GeminiModelOption = AIModelOption;
 
 export interface AssistantAction {
   type: string;

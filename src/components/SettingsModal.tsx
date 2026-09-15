@@ -24,6 +24,7 @@ interface SettingsModalProps {
   onTestVoice: () => void;
   activeModel?: string;
   onSelectModel?: (model: string) => void;
+  availableModels?: Array<{ id: string; name: string; tag?: string; desc?: string; description?: string; provider?: string }>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -34,8 +35,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   securityPermissions,
   onUpdatePermissions,
   onTestVoice,
-  activeModel = 'gemini-3.8-flash',
-  onSelectModel
+  activeModel = 'gpt-4o-mini',
+  onSelectModel,
+  availableModels = []
 }) => {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [activeTab, setActiveTab] = useState<'auth' | 'ai' | 'voice' | 'permissions' | 'cloud_notes'>('ai');
@@ -327,42 +329,56 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="p-3 bg-[#00f2ff08] border border-[#00f2ff33] rounded-sm space-y-1">
               <div className="font-bold text-[#00f2ff] flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4" />
-                CEREBRO PRINCIPAL: GOOGLE GEMINI CLOUD (ATLAS AI 2.0)
+                NÚCLEO NEURAL: ARQUITECTURA MULTI-ENGINE (OPENAI / GROQ / GEMINI)
               </div>
               <p className="text-gray-300 text-[11px] leading-relaxed">
-                ATLAS 2.0 utiliza Google Gemini como motor principal en la nube con arquitectura de herramientas (Function Calling), seguridad por listas blancas y memoria persistente.
+                ATLAS Core ahora integra la API de <strong>OpenAI</strong> y aceleradores compatibles (Groq Cloud de ultra-baja latencia) junto con Google Gemini y un motor de contingencia local de 0 ms, garantizando alta disponibilidad sin cuotas agotadas.
               </p>
             </div>
 
             <div className="space-y-2.5">
-              <div className="font-bold text-gray-300">Modelos Disponibles:</div>
+              <div className="font-bold text-gray-300">Modelos Neuronales Disponibles:</div>
               
-              {[
-                {
-                  id: 'gemini-3.8-flash',
-                  name: 'Gemini 3.8 Flash (Recomendado)',
-                  tag: 'Predeterminado / Rápido',
-                  desc: 'Excelente equilibrio entre velocidad ultra rápida, razonamiento táctico, visión y bajo consumo de cuota.'
-                },
-                {
-                  id: 'gemini-3.1-pro-preview',
-                  name: 'Gemini 3.1 Pro',
-                  tag: 'Razonamiento Complejo',
-                  desc: 'Máxima potencia para generación y arquitectura de código complejo, planificación y análisis profundo.'
-                },
-                {
-                  id: 'gemini-3.1-flash-lite',
-                  name: 'Gemini 3.1 Flash Lite',
-                  tag: 'Mínima Latencia',
-                  desc: 'Optimizado para la menor latencia en tiempo de respuesta durante comandos de voz continuos.'
-                },
-                {
-                  id: 'gemini-flash-latest',
-                  name: 'Gemini Flash Latest',
-                  tag: 'Canal Estable',
-                  desc: 'Versión estable de última generación con soporte completo para navegación e integración.'
-                }
-              ].map((model) => (
+              {(availableModels && availableModels.length > 0
+                ? availableModels.map(m => ({
+                    id: m.id,
+                    name: m.name,
+                    tag: m.tag || m.provider || 'IA',
+                    desc: m.desc || m.description || 'Motor neuronal de alta velocidad'
+                  }))
+                : [
+                    {
+                      id: 'llama-3.3-70b-versatile',
+                      name: 'LLaMA 3.3 70B Versatile (Groq Cloud)',
+                      tag: 'Groq // Ultrarrápido',
+                      desc: 'Velocidad extrema (~500 t/s), cero latencia perceptible, alta precisión táctica y llamada de herramientas.'
+                    },
+                    {
+                      id: 'llama-3.1-8b-instant',
+                      name: 'LLaMA 3.1 8B Instant (Groq Cloud)',
+                      tag: 'Groq // Instantáneo',
+                      desc: 'Latencia mínima absoluta (~100 ms) ideal para interacción por voz en tiempo real.'
+                    },
+                    {
+                      id: 'gpt-4o-mini',
+                      name: 'GPT-4o Mini (OpenAI)',
+                      tag: 'OpenAI // Rápido y Eficiente',
+                      desc: 'Excelente fluidez en español, alta precisión táctica, visión y velocidad optimizada.'
+                    },
+                    {
+                      id: 'gpt-4o',
+                      name: 'GPT-4o (OpenAI)',
+                      tag: 'OpenAI // Máxima Inteligencia',
+                      desc: 'Máxima potencia cognitiva multimodal, análisis profundo de arquitectura de software y código.'
+                    },
+                    {
+                      id: 'gemini-3.8-flash',
+                      name: 'Gemini 3.8 Flash (Google Cloud)',
+                      tag: 'Google Gemini',
+                      desc: 'Canal multimodal de Google Gemini con integración nativa.'
+                    }
+                  ]
+              ).map((model) => (
                 <div
                   key={model.id}
                   onClick={() => onSelectModel && onSelectModel(model.id)}

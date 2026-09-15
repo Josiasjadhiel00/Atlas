@@ -248,8 +248,8 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
     { id: 't-3', title: 'Preparar presentación DevJos', priority: 'medium', status: 'pending', createdAt: '12:18 p. m.' },
     { id: 't-4', title: 'Estudiar Flask y SQLite', priority: 'low', status: 'completed', createdAt: '12:20 p. m.' }
   ]);
-  const [activeModel, setActiveModel] = useState<string>('gemini-3.8-flash');
-  const [availableModels, setAvailableModels] = useState<GeminiModelOption[]>([]);
+  const [activeModel, setActiveModel] = useState<string>('gpt-4o-mini');
+  const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'console' | 'tasks' | 'memories' | 'search' | 'vision'>('console');
   const [searchResults, setSearchResults] = useState<WebSearchResult[]>([]);
 
@@ -1471,6 +1471,7 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           securityPermissions={securityPermissions}
           onUpdatePermissions={setSecurityPermissions}
           activeModel={activeModel}
+          availableModels={availableModels}
           onSelectModel={(mod) => {
             setActiveModel(mod);
             addLog('SYSTEM', `🧠 [NÚCLEO IA CAMBIADO]: Modelo activo ahora es '${mod}'`);
