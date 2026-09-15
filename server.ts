@@ -611,7 +611,9 @@ app.post("/api/assistant/process", async (req, res) => {
       history = [], 
       memories = [], 
       preferredModel, 
-      useOllama = false 
+      useOllama = false,
+      customApps = [],
+      customFunctions = []
     } = req.body;
 
     if (!prompt || typeof prompt !== "string") {
@@ -621,7 +623,9 @@ app.post("/api/assistant/process", async (req, res) => {
     const lower = prompt.toLowerCase();
     const aiConfig = getAIConfig();
 
-    const ALLOWED_APPS = ["code", "vscode", "chrome", "google-chrome", "spotify", "terminal", "notepad", "calculator", "explorer", "browser", "firefox", "edge"];
+    const baseAllowedApps = ["code", "vscode", "chrome", "google-chrome", "spotify", "terminal", "notepad", "calculator", "explorer", "browser", "firefox", "edge"];
+    const customAppNames = Array.isArray(customApps) ? customApps.map((a: any) => (a.target || a.name || "").toLowerCase()).filter(Boolean) : [];
+    const ALLOWED_APPS = Array.from(new Set([...baseAllowedApps, ...customAppNames]));
     const ALLOWED_DIRS = ["desktop", "documents", "projects", "workspace", "stark_autonomous", "atlas_core"];
 
     let toolName = "NONE";
@@ -668,6 +672,22 @@ app.post("/api/assistant/process", async (req, res) => {
         memories.map((m: any, idx: number) => `[${idx + 1}] (${m.category || 'general'}): ${m.topic} -> ${m.content}`).join("\n")
       : "\n(No hay recuerdos previos registrados en memoria).";
 
+    const customAppsContext = Array.isArray(customApps) && customApps.length > 0
+      ? "\n\nAPLICACIONES PERSONALIZADAS DEL USUARIO (ACTIVAS Y AUTORIZADAS):\n" +
+        customApps
+          .filter((a: any) => a.enabled !== false)
+          .map((a: any) => `- App "${a.name}" (Destino: "${a.target}", Alias de voz: [${Array.isArray(a.voiceAliases) ? a.voiceAliases.join(", ") : a.name}]) -> Ejecuta abrir_aplicacion con nombre: "${a.target || a.name}"`)
+          .join("\n")
+      : "";
+
+    const customFunctionsContext = Array.isArray(customFunctions) && customFunctions.length > 0
+      ? "\n\nFUNCIONES Y RUTINAS TÁCTICAS PERSONALIZADAS DEL USUARIO (AUTORIZADAS):\n" +
+        customFunctions
+          .filter((f: any) => f.enabled !== false)
+          .map((f: any) => `- Función "${f.name}" ("${f.title}"): frases activadoras: [${Array.isArray(f.triggerPhrases) ? f.triggerPhrases.join(", ") : f.name}]. Tipo: ${f.actionType}. Respuesta de voz exclusiva: "${f.payload?.customSpeech || f.description}". Requiere confirmación: ${f.requireConfirmation ? "true" : "false"}.`)
+          .join("\n")
+      : "";
+
     const systemInstruction = `
 Eres A.T.L.A.S. (Autonomous System Protocol // Core OS), un núcleo de inteligencia artificial avanzado diseñado para la optimización de flujos de trabajo, control de sistemas y gestión de productividad personal de tu creador. Tu interfaz es un panel táctico y futurista tipo HUD.
 
@@ -711,13 +731,15 @@ FORMATO DE RESPUESTA OBLIGATORIO EN JSON VÁLIDO:
     "name": "nombre_de_la_herramienta" | "NONE",
     "arguments": { "parametro": "valor" },
     "description": "Breve descripción táctica",
-    "category": "information" | "projects" | "computer" | "development" | "memory" | "conversation"
+    "category": "information" | "projects" | "computer" | "development" | "memory" | "conversation" | "custom"
   },
   "requires_confirmation": false,
   "confirmation_target": "",
   "hud_state": "idle" | "listening" | "thinking" | "searching" | "executing" | "speaking"
 }
 ${memoryContext}
+${customAppsContext}
+${customFunctionsContext}
 `;
 
     // =========================================================================
@@ -856,8 +878,50 @@ ${memoryContext}
     if (!speech) {
       activeModelUsed = "atlas_heuristic_core";
 
+      // 0. Funciones y Rutinas Tácticas Personalizadas del Usuario
+      if (Array.isArray(customFunctions)) {
+        for (const cf of customFunctions) {
+          if (cf.enabled === false) continue;
+          const matchTrigger = Array.isArray(cf.triggerPhrases) && cf.triggerPhrases.some(
+            (tp: string) => tp && lower.includes(tp.toLowerCase().trim())
+          );
+          const matchName = cf.name && lower.includes(cf.name.toLowerCase().replace(/_/g, " "));
+          if (matchTrigger || matchName) {
+            toolName = cf.name;
+            toolArgs = cf.payload || {};
+            desc = cf.description || `Rutina táctica: ${cf.title || cf.name}`;
+            speech = cf.payload?.customSpeech || cf.description || `Ejecutando la función personalizada "${cf.title || cf.name}".`;
+            category = "custom";
+            hudState = "executing";
+            requiresConfirmation = Boolean(cf.requireConfirmation);
+            confirmationTarget = cf.title || cf.name;
+            break;
+          }
+        }
+      }
+
+      // 0.1. Aplicaciones Personalizadas del Usuario
+      if (!speech && Array.isArray(customApps)) {
+        for (const ca of customApps) {
+          if (ca.enabled === false) continue;
+          const matchAlias = Array.isArray(ca.voiceAliases) && ca.voiceAliases.some(
+            (va: string) => va && lower.includes(va.toLowerCase().trim())
+          );
+          const matchAppName = ca.name && lower.includes(ca.name.toLowerCase().trim());
+          if (matchAlias || matchAppName) {
+            toolName = "abrir_aplicacion";
+            toolArgs = { nombre: ca.target || ca.name, app_name: ca.name, target: ca.target };
+            desc = ca.description || `Lanzador: ${ca.name}`;
+            speech = `Abriendo ${ca.name} de acuerdo con tu configuración personalizada.`;
+            category = "computer";
+            hudState = "executing";
+            break;
+          }
+        }
+      }
+
       // A. Reloj, Fecha y Hora
-      if (lower.includes("hora") || lower.includes("qué hora es") || lower.includes("que hora es") || lower.includes("dime la hora")) {
+      if (!speech && (lower.includes("hora") || lower.includes("qué hora es") || lower.includes("que hora es") || lower.includes("dime la hora"))) {
         const now = new Date();
         const timeStr = now.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
         const dateStr = now.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long", year: "numeric" });

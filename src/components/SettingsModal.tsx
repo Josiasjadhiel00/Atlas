@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   User, LogIn, LogOut, Shield, Sliders, Volume2, Globe, Laptop, 
   Smartphone, FolderLock, FileText, Check, AlertCircle, Sparkles, KeyRound,
-  Mail, Lock, UserPlus, Zap
+  Mail, Lock, UserPlus, Zap, Cpu
 } from 'lucide-react';
 import { 
   User as FirebaseUser, signInWithPopup, signOut, onAuthStateChanged,
@@ -11,8 +11,9 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../lib/firebase';
-import { VoiceSettings, SecurityPermissions, UserNote } from '../types';
+import { VoiceSettings, SecurityPermissions, UserNote, CustomApplication, CustomFunction } from '../types';
 import { sciFiAudio } from '../utils/audioSynth';
+import { CustomAppsAndFunctionsConfig } from './CustomAppsAndFunctionsConfig';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -25,6 +26,11 @@ interface SettingsModalProps {
   activeModel?: string;
   onSelectModel?: (model: string) => void;
   availableModels?: Array<{ id: string; name: string; tag?: string; desc?: string; description?: string; provider?: string }>;
+  customApps?: CustomApplication[];
+  onUpdateCustomApps?: (apps: CustomApplication[]) => void;
+  customFunctions?: CustomFunction[];
+  onUpdateCustomFunctions?: (funcs: CustomFunction[]) => void;
+  onTestAppOrFunction?: (name: string, type: 'app' | 'function') => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -37,10 +43,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onTestVoice,
   activeModel = 'gpt-4o-mini',
   onSelectModel,
-  availableModels = []
+  availableModels = [],
+  customApps = [],
+  onUpdateCustomApps,
+  customFunctions = [],
+  onUpdateCustomFunctions,
+  onTestAppOrFunction
 }) => {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'auth' | 'ai' | 'voice' | 'permissions' | 'cloud_notes'>('ai');
+  const [activeTab, setActiveTab] = useState<'auth' | 'ai' | 'voice' | 'permissions' | 'cloud_notes' | 'custom_actions'>('ai');
   const [authMode, setAuthMode] = useState<'google' | 'email_login' | 'email_signup'>('google');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [authLoading, setAuthLoading] = useState(false);
@@ -66,6 +77,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             const data = docSnap.data();
             if (data.voiceSettings) onUpdateVoiceSettings(data.voiceSettings);
             if (data.securityPermissions) onUpdatePermissions(data.securityPermissions);
+            if (data.customApps && onUpdateCustomApps) onUpdateCustomApps(data.customApps);
+            if (data.customFunctions && onUpdateCustomFunctions) onUpdateCustomFunctions(data.customFunctions);
           }
         } catch (e) {
           console.error('Error cargando preferencias de nube:', e);
@@ -74,7 +87,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
 
     return () => unsubscribe();
-  }, [onUpdateVoiceSettings, onUpdatePermissions]);
+  }, [onUpdateVoiceSettings, onUpdatePermissions, onUpdateCustomApps, onUpdateCustomFunctions]);
 
   // Escuchar notas y actividades del usuario sincronizadas
   useEffect(() => {
@@ -232,6 +245,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         await setDoc(doc(db, 'users', currentUser.uid, 'settings', 'preferences'), {
           voiceSettings,
           securityPermissions,
+          customApps,
+          customFunctions,
           updatedAt: new Date().toISOString()
         }, { merge: true });
       } catch (e) {
@@ -320,6 +335,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             <Smartphone className="w-3.5 h-3.5" />
             SINCRONIZACIÓN MÓVIL / PC
+          </button>
+
+          <button
+            onClick={() => setActiveTab('custom_actions')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-sm border transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'custom_actions'
+                ? 'bg-[#00f2ff] text-black border-[#00f2ff]'
+                : 'bg-black/60 text-gray-300 border-[#00f2ff33] hover:text-white'
+            }`}
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            APPS Y FUNCIONES PERSONALIZADAS
           </button>
         </div>
 
@@ -856,6 +883,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* Tab 5: Custom Applications & Functions */}
+        {activeTab === 'custom_actions' && (
+          <CustomAppsAndFunctionsConfig
+            customApps={customApps}
+            onUpdateCustomApps={onUpdateCustomApps || (() => {})}
+            customFunctions={customFunctions}
+            onUpdateCustomFunctions={onUpdateCustomFunctions || (() => {})}
+            onTestAppOrFunction={onTestAppOrFunction}
+            onSaveToCloud={saveSettingsToCloud}
+          />
         )}
 
         {/* Modal Footer */}

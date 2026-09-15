@@ -10,7 +10,8 @@ import {
 import { 
   AssistantState, AssistantTheme, AssistantVoiceName, AssistantLogEntry, 
   AssistantAction, VoiceSettings, SecurityPermissions, WebSearchResult, UserNote,
-  SmartMemory, ProjectTask, GeminiModelOption, AssistantDiagnostic
+  SmartMemory, ProjectTask, GeminiModelOption, AssistantDiagnostic,
+  CustomApplication, CustomFunction
 } from '../types';
 import { ArcReactorCanvas } from './ArcReactorCanvas';
 import { TacticalHudCanvas } from './TacticalHudCanvas';
@@ -252,6 +253,121 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'console' | 'tasks' | 'memories' | 'search' | 'vision'>('console');
   const [searchResults, setSearchResults] = useState<WebSearchResult[]>([]);
+
+  // Custom Applications & Functions
+  const [customApps, setCustomApps] = useState<CustomApplication[]>(() => {
+    try {
+      const saved = localStorage.getItem('atlas_custom_apps');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Error cargando apps personalizadas:', e);
+    }
+    return [
+      {
+        id: 'app_vscode',
+        name: 'VS Code',
+        target: 'code',
+        description: 'Editor de código principal de desarrollo.',
+        voiceAliases: ['abre vscode', 'abre visual studio', 'abre mi editor', 'abre code'],
+        category: 'dev',
+        enabled: true
+      },
+      {
+        id: 'app_chrome',
+        name: 'Google Chrome',
+        target: 'google-chrome',
+        description: 'Navegador web para investigación y pruebas.',
+        voiceAliases: ['abre chrome', 'abre navegador', 'abre internet', 'abre google'],
+        category: 'work',
+        enabled: true
+      },
+      {
+        id: 'app_spotify',
+        name: 'Spotify',
+        target: 'spotify',
+        description: 'Reproductor de música y podcasts.',
+        voiceAliases: ['abre spotify', 'reproduce musica', 'pon spotify'],
+        category: 'creative',
+        enabled: true
+      },
+      {
+        id: 'app_discord',
+        name: 'Discord',
+        target: 'discord',
+        description: 'Comunicaciones de voz y texto para equipos y proyectos.',
+        voiceAliases: ['abre discord', 'inicia discord', 'comunidad discord'],
+        category: 'work',
+        enabled: true
+      }
+    ];
+  });
+
+  const [customFunctions, setCustomFunctions] = useState<CustomFunction[]>(() => {
+    try {
+      const saved = localStorage.getItem('atlas_custom_functions');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Error cargando funciones personalizadas:', e);
+    }
+    return [
+      {
+        id: 'func_modo_estudio',
+        name: 'modo_estudio',
+        title: 'Modo Estudio y Concentración',
+        triggerPhrases: ['activa modo estudio', 'iniciar sesion de estudio', 'modo concentracion', 'a estudiar'],
+        description: 'Prepara el entorno para alta concentración, silencia alertas y fija temporizador.',
+        actionType: 'macro_sequence',
+        payload: {
+          appTarget: 'spotify',
+          macroSteps: ['Abre Spotify con música Lo-Fi', 'Activa temporizador de 25 min', 'Silencia notificaciones'],
+          customSpeech: 'Modo estudio y concentración activado, Comandante. Entorno optimizado para máximo enfoque.'
+        },
+        requireConfirmation: false,
+        enabled: true
+      },
+      {
+        id: 'func_modo_desarrollo',
+        name: 'modo_desarrollo',
+        title: 'Modo Desarrollo y Programación',
+        triggerPhrases: ['modo desarrollo', 'iniciar programacion', 'a programar', 'entorno de codigo'],
+        description: 'Abre el editor de código, despliega la consola y prepara telemetría.',
+        actionType: 'macro_sequence',
+        payload: {
+          appTarget: 'code',
+          macroSteps: ['Despliega VS Code', 'Abre terminal de desarrollo', 'Inicia monitoreo de CPU'],
+          customSpeech: 'Modo desarrollo inicializado. Editor de código y terminal desplegados en pantalla.'
+        },
+        requireConfirmation: false,
+        enabled: true
+      },
+      {
+        id: 'func_inspeccion_sistema',
+        name: 'inspeccion_sistema',
+        title: 'Diagnóstico Táctico Completo',
+        triggerPhrases: ['diagnostico completo', 'analisis general', 'revisa el sistema', 'informe total'],
+        description: 'Comprueba el estado del procesador, memorias neuronales y latencia de red.',
+        actionType: 'custom_speech',
+        payload: {
+          customSpeech: 'Ejecutando diagnóstico integral de A.T.L.A.S. Núcleo al 100%, telemetría nominal y protocolos de seguridad en línea.'
+        },
+        requireConfirmation: false,
+        enabled: true
+      }
+    ];
+  });
+
+  // Local Storage Synchronization
+  useEffect(() => {
+    try {
+      localStorage.setItem('atlas_custom_apps', JSON.stringify(customApps));
+    } catch {}
+  }, [customApps]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('atlas_custom_functions', JSON.stringify(customFunctions));
+    } catch {}
+  }, [customFunctions]);
 
   // Escuchar estado de usuario Firebase
   useEffect(() => {
@@ -680,7 +796,9 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           assistantName,
           preferredModel: activeModel,
           memories: memories.slice(0, 15).map(m => ({ topic: m.topic, content: m.content, category: m.category })),
-          history: logs.slice(-5).map(l => ({ role: l.sender.toLowerCase(), text: l.text }))
+          history: logs.slice(-5).map(l => ({ role: l.sender.toLowerCase(), text: l.text })),
+          customApps,
+          customFunctions
         })
       });
 
@@ -766,15 +884,69 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           }
         }
 
-        // D. Control Seguro de Computadora (Bridge Local o Sandbox)
-        if (bridgeStatus === 'connected') {
-          if ((toolName === 'open_application' || toolName === 'abrir_aplicacion') && securityPermissions.allowOpenApps) {
-            const app = toolArgs.app_name || toolArgs.nombre || (command.toLowerCase().includes('code') ? 'code' : 'chrome');
-            const bridgeRes = await executeRealOSAction('open_app', { name: app });
+        // D. Control de Aplicaciones (Personalizadas y del Sistema)
+        else if (toolName === 'open_application' || toolName === 'abrir_aplicacion') {
+          const targetRaw = toolArgs.target || toolArgs.app_name || toolArgs.nombre || (command.toLowerCase().includes('code') ? 'code' : 'chrome');
+          const matchedApp = customApps.find(a => 
+            a.name.toLowerCase() === String(targetRaw).toLowerCase() ||
+            (a.target && a.target.toLowerCase() === String(targetRaw).toLowerCase()) ||
+            (a.voiceAliases && a.voiceAliases.some(alias => command.toLowerCase().includes(alias.toLowerCase())))
+          );
+
+          const finalTarget = matchedApp ? matchedApp.target : targetRaw;
+          const finalName = matchedApp ? matchedApp.name : targetRaw;
+
+          if (finalTarget && (finalTarget.startsWith('http://') || finalTarget.startsWith('https://'))) {
+            addLog('SYSTEM', `🌐 [APLICACIÓN WEB]: Despachando '${finalName}' (${finalTarget}).`);
+            try {
+              window.open(finalTarget, '_blank', 'noopener,noreferrer');
+            } catch {}
+          } else if (bridgeStatus === 'connected' && securityPermissions.allowOpenApps) {
+            const bridgeRes = await executeRealOSAction('open_app', { name: finalTarget });
             if (bridgeRes?.success) {
-              addLog('SYSTEM', `🟢 [WINDOWS REAL]: Programa '${app}' ejecutado exitosamente en tu PC.`);
+              addLog('SYSTEM', `🟢 [WINDOWS REAL]: Programa '${finalName}' ejecutado exitosamente en tu PC.`);
+            } else {
+              addLog('SYSTEM', `⚠️ [LANZADOR]: No se pudo iniciar '${finalName}' en PC local.`);
             }
-          } else if ((toolName === 'create_directory' || toolName === 'crear_carpeta') && securityPermissions.allowCreateFiles) {
+          } else {
+            addLog('SYSTEM', `🖥️ [LANZADOR ATLAS]: Orden de apertura enviada para '${finalName}'.`);
+          }
+        }
+
+        // E. Funciones y Rutinas Tácticas Personalizadas
+        const matchedCustomFunc = customFunctions.find(f => 
+          f.name === toolName || 
+          f.title.toLowerCase() === toolName.toLowerCase() ||
+          (f.triggerPhrases && f.triggerPhrases.some(tp => command.toLowerCase().includes(tp.toLowerCase())))
+        );
+
+        if (matchedCustomFunc) {
+          addLog('SYSTEM', `⚡ [RUTINA PERSONALIZADA]: Ejecutando '${matchedCustomFunc.title}'`);
+          
+          // Ejecutar pasos de macro en secuencia
+          if (matchedCustomFunc.payload.macroSteps && matchedCustomFunc.payload.macroSteps.length > 0) {
+            matchedCustomFunc.payload.macroSteps.forEach((step, sIdx) => {
+              setTimeout(() => {
+                sciFiAudio.playBlip();
+                addLog('SYSTEM', `  ↳ [Paso ${sIdx + 1}/${matchedCustomFunc.payload.macroSteps!.length}]: ${step}`);
+              }, (sIdx + 1) * 350);
+            });
+          }
+
+          // Si la función abre una app específica
+          if (matchedCustomFunc.payload.appTarget && securityPermissions.allowOpenApps) {
+            const appTarget = matchedCustomFunc.payload.appTarget;
+            if (appTarget.startsWith('http://') || appTarget.startsWith('https://')) {
+              window.open(appTarget, '_blank', 'noopener,noreferrer');
+            } else if (bridgeStatus === 'connected') {
+              executeRealOSAction('open_app', { name: appTarget });
+            }
+          }
+        }
+
+        // F. Archivos y Carpetas del Sistema
+        if (bridgeStatus === 'connected') {
+          if ((toolName === 'create_directory' || toolName === 'crear_carpeta') && securityPermissions.allowCreateFiles) {
             const folder = toolArgs.dir_name || toolArgs.nombre || 'Proyectos_Atlas';
             const bridgeRes = await executeRealOSAction('create_folder', { name: folder });
             if (bridgeRes?.success) {
@@ -1354,6 +1526,22 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
     }
   };
 
+  // Test app or function directly in the HUD
+  const handleTestAppOrFunction = (nameOrTitle: string, type: 'app' | 'function') => {
+    setIsSettingsOpen(false);
+    if (type === 'app') {
+      const app = customApps.find(a => a.name === nameOrTitle || a.target === nameOrTitle);
+      const cmd = app?.voiceAliases?.[0] || `Abre ${nameOrTitle}`;
+      addLog('USER', cmd);
+      processCommand(cmd);
+    } else {
+      const func = customFunctions.find(f => f.name === nameOrTitle || f.title === nameOrTitle);
+      const cmd = func?.triggerPhrases?.[0] || func?.title || nameOrTitle;
+      addLog('USER', cmd);
+      processCommand(cmd);
+    }
+  };
+
   // Render unified Atlas HUD for ALL sections (Inicio, Conversación, Investigación, Proyectos, Tareas, Memoria, Archivos, Visión)
   return (
     <div className="w-full h-full relative">
@@ -1386,7 +1574,13 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         logs={logs}
         userName={currentUser?.displayName || 'Josías'}
         activeNav={navSection}
-        onSelectNav={(nav) => setNavSection(nav as any)}
+        onSelectNav={(nav) => {
+          if (nav === 'ajustes') {
+            setIsSettingsOpen(true);
+          } else {
+            setNavSection(nav as any);
+          }
+        }}
         onQuickAction={handleQuickAction}
         onSearchSubmit={(q) => {
           processCommand(`Busca en internet información sobre: ${q}`);
@@ -1472,6 +1666,11 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           onUpdatePermissions={setSecurityPermissions}
           activeModel={activeModel}
           availableModels={availableModels}
+          customApps={customApps}
+          onUpdateCustomApps={setCustomApps}
+          customFunctions={customFunctions}
+          onUpdateCustomFunctions={setCustomFunctions}
+          onTestAppOrFunction={handleTestAppOrFunction}
           onSelectModel={(mod) => {
             setActiveModel(mod);
             addLog('SYSTEM', `🧠 [NÚCLEO IA CAMBIADO]: Modelo activo ahora es '${mod}'`);

@@ -108,3 +108,30 @@ export interface UserNote {
   createdAt: string;
   syncedFrom?: 'PC' | 'PHONE' | 'WEB';
 }
+
+export interface CustomApplication {
+  id: string;
+  name: string; // Identifier & display name (e.g. "Blender", "Discord", "Steam", "Photoshop", "Notion", "Figma", "Spotify", "OBS Studio", "Terminal")
+  target: string; // executable or URL (e.g. "blender", "discord", "https://notion.so")
+  description: string;
+  voiceAliases: string[]; // voice phrases or keywords (e.g. ["abre blender", "modelado 3d"])
+  category: 'work' | 'creative' | 'games' | 'dev' | 'system' | 'custom';
+  enabled: boolean;
+}
+
+export interface CustomFunction {
+  id: string;
+  name: string; // Action identifier (e.g. "modo_estudio", "backup_proyecto", "alerta_reunion")
+  title: string; // Display title
+  triggerPhrases: string[]; // Phrases that activate this function (e.g. ["activa modo estudio", "iniciar sesion de concentracion"])
+  description: string;
+  actionType: 'open_app' | 'macro_sequence' | 'system_command' | 'custom_speech';
+  payload: {
+    appTarget?: string;
+    macroSteps?: string[];
+    command?: string;
+    customSpeech?: string;
+  };
+  requireConfirmation: boolean;
+  enabled: boolean;
+}
