@@ -30,6 +30,7 @@ import { StarkProtocolTasks } from './StarkProtocolTasks';
 import { SettingsModal } from './SettingsModal';
 import { AtlasDashboard } from './AtlasDashboard';
 import { sciFiAudio, speakSpanish } from '../utils/audioSynth';
+import { useAtlasWebSocket } from '../hooks/useAtlasWebSocket';
 import { auth, db } from '../lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { collection, addDoc, doc, setDoc, deleteDoc, onSnapshot, query, orderBy, updateDoc } from 'firebase/firestore';
@@ -238,17 +239,20 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
 
   // Smart Memories & Project Tasks (ATLAS AI 2.0)
   const [navSection, setNavSection] = useState<'inicio' | 'conversacion' | 'investigacion' | 'proyectos' | 'tareas' | 'memoria' | 'archivos' | 'vision' | 'ajustes'>('inicio');
-  const [memories, setMemories] = useState<SmartMemory[]>([
-    { id: 'm-1', topic: 'Logixt', content: 'Logixt es un sistema SaaS de inventario.', category: 'project', createdAt: 'Reciente' },
-    { id: 'm-2', topic: 'ATLAS Core', content: 'Mi proyecto principal se llama ATLAS Core.', category: 'project', createdAt: 'Reciente' },
-    { id: 'm-3', topic: 'Educación', content: 'Estoy en el Politécnico.', category: 'personal', createdAt: 'Reciente' }
-  ]);
-  const [tasks, setTasks] = useState<ProjectTask[]>([
-    { id: 't-1', title: 'Revisar módulo de inventario', priority: 'high', status: 'pending', createdAt: '12:10 p. m.' },
-    { id: 't-2', title: 'Diseño del panel de control', priority: 'medium', status: 'pending', createdAt: '12:15 p. m.' },
-    { id: 't-3', title: 'Preparar presentación DevJos', priority: 'medium', status: 'pending', createdAt: '12:18 p. m.' },
-    { id: 't-4', title: 'Estudiar Flask y SQLite', priority: 'low', status: 'completed', createdAt: '12:20 p. m.' }
-  ]);
+  const [memories, setMemories] = useState<SmartMemory[]>(() => {
+    try {
+      const saved = localStorage.getItem('atlas_memories');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+  const [tasks, setTasks] = useState<ProjectTask[]>(() => {
+    try {
+      const saved = localStorage.getItem('atlas_tasks');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
   const [activeModel, setActiveModel] = useState<string>('gpt-4o-mini');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'console' | 'tasks' | 'memories' | 'search' | 'vision'>('console');
@@ -369,6 +373,18 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
     } catch {}
   }, [customFunctions]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('atlas_tasks', JSON.stringify(tasks));
+    } catch {}
+  }, [tasks]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('atlas_memories', JSON.stringify(memories));
+    } catch {}
+  }, [memories]);
+
   // Escuchar estado de usuario Firebase
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -395,41 +411,47 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
 
   // Sincronización en tiempo real de Memoria Persistente (Firestore + Fallback Local)
   useEffect(() => {
+    if (!currentUser) return;
     try {
-      const q = query(collection(db, 'memories'), orderBy('createdAt', 'desc'));
+      const q = query(collection(db, 'users', currentUser.uid, 'memories'), orderBy('createdAt', 'desc'));
       const unsubMemories = onSnapshot(q, (snapshot) => {
         const list: SmartMemory[] = [];
         snapshot.forEach((d) => {
           list.push({ id: d.id, ...(d.data() as any) });
         });
-        setMemories(list);
-      }, (err) => {
+        if (list.length > 0) {
+          setMemories(list);
+        }
+      }, () => {
         console.warn('Firestore memories offline, using local memory state');
       });
       return () => unsubMemories();
     } catch {
       // Local fallback
     }
-  }, []);
+  }, [currentUser]);
 
   // Sincronización en tiempo real de Tareas de Proyectos (Firestore + Fallback Local)
   useEffect(() => {
+    if (!currentUser) return;
     try {
-      const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
+      const q = query(collection(db, 'users', currentUser.uid, 'tasks'), orderBy('createdAt', 'desc'));
       const unsubTasks = onSnapshot(q, (snapshot) => {
         const list: ProjectTask[] = [];
         snapshot.forEach((d) => {
           list.push({ id: d.id, ...(d.data() as any) });
         });
-        setTasks(list);
-      }, (err) => {
+        if (list.length > 0) {
+          setTasks(list);
+        }
+      }, () => {
         console.warn('Firestore tasks offline, using local tasks state');
       });
       return () => unsubTasks();
     } catch {
       // Local fallback
     }
-  }, []);
+  }, [currentUser]);
 
   // Local PC Bridge Status & Modal (for real Windows/Mac control)
   const [bridgeStatus, setBridgeStatus] = useState<'checking' | 'connected' | 'offline'>('checking');
@@ -663,7 +685,17 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const addLog = (sender: AssistantLogEntry['sender'], text: string, action?: AssistantAction) => {
+  const addLog = (
+    sender: AssistantLogEntry['sender'], 
+    text: string, 
+    action?: AssistantAction,
+    extra?: {
+      knowledgeSource?: 'model_knowledge' | 'internet_research' | 'system_action';
+      recalledMemories?: string[];
+      sources?: { title: string; url: string; snippet?: string }[];
+      toolDetails?: { name: string; params: any; result?: any };
+    }
+  ) => {
     setLogs(prev => [
       ...prev,
       {
@@ -671,10 +703,59 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         sender,
         text,
-        action
+        action,
+        knowledgeSource: extra?.knowledgeSource,
+        recalledMemories: extra?.recalledMemories,
+        sources: extra?.sources,
+        toolDetails: extra?.toolDetails
       }
     ]);
   };
+
+  // Real-time WebSocket Protocol & Remote Device Dispatcher
+  const { 
+    isConnected: isWsConnected, 
+    dispatchAction: wsDispatchAction, 
+    syncChatLog 
+  } = useAtlasWebSocket({
+    onRemoteActionReceived: (remoteAction) => {
+      sciFiAudio.playConfirmSound();
+      addLog('SYSTEM', `⚡ [ORDEN REMOTA RECIBIDA VÍA WEBSOCKET]: Ejecutando "${remoteAction.action}" desde ${remoteAction.sourceDeviceId || 'nodo móvil'}.`);
+
+      if (remoteAction.action === 'open_app' || remoteAction.action === 'abrir_aplicacion') {
+        const appName = remoteAction.parameters?.nombre || remoteAction.parameters?.name || 'code';
+        executeRealOSAction('open_app', { name: appName });
+        setState('speaking');
+        if (voiceSettings.autoSpeak && speechSynthesisActiveProp) {
+          speakSpanish(`Ejecutando orden remota: Abriendo ${appName}.`, assistantName, voiceSettings);
+        }
+        setTimeout(() => setState('idle'), 4000);
+      } else if (remoteAction.action === 'volumen' || remoteAction.action === 'set_volume') {
+        const level = remoteAction.parameters?.level || 60;
+        executeRealOSAction('set_volume', { level });
+        addLog('SYSTEM', `🔊 Nivel de audio ajustado a ${level}% por enlace remoto.`);
+      } else if (remoteAction.action === 'system_health_check') {
+        setState('speaking');
+        if (voiceSettings.autoSpeak && speechSynthesisActiveProp) {
+          speakSpanish('Diagnóstico de subsistemas completado. Enlace de telemetría nominal.', assistantName, voiceSettings);
+        }
+        setTimeout(() => setState('idle'), 3000);
+      }
+    },
+    onAssistantBroadcast: (broadcast) => {
+      if (broadcast && broadcast.speech) {
+        addLog(assistantName, broadcast.speech, broadcast.action, {
+          sources: broadcast.sources,
+          toolDetails: broadcast.parameters ? { name: broadcast.action, params: broadcast.parameters } : undefined
+        });
+      }
+    },
+    onChatLogSync: (entry) => {
+      if (entry && entry.text) {
+        setLogs(prev => [...prev, entry]);
+      }
+    }
+  });
 
   // Process command through Backend Server & Real OS Bridge
   const processCommand = async (command: string) => {
@@ -698,9 +779,9 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
 
     if (isSearchIntent && securityPermissions.allowWebSearch) {
       try {
-        setState('executing');
+        setState('searching');
         sciFiAudio.playConfirmSound();
-        addLog('SYSTEM', `🌐 [WEB SEARCH]: Navegando en Google e investigando fuentes en tiempo real...`);
+        addLog('SYSTEM', `🌐 [INVESTIGACIÓN EN TIEMPO REAL]: Conectando con fuentes de Internet...`);
 
         const searchQuery = command
           .replace(/busca en internet/gi, '')
@@ -719,10 +800,27 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           const webData = await webRes.json();
           const answer = webData.answer || webData.summary || 'Información obtenida de la red, señor.';
           
+          if (webData.sources && Array.isArray(webData.sources)) {
+            setSearchResults(webData.sources.map((s: any, idx: number) => ({
+              id: `src-${Date.now()}-${idx}`,
+              title: s.title || `Fuente ${idx + 1}`,
+              snippet: s.snippet || answer.slice(0, 160) + '...',
+              url: s.url || '#',
+              source: 'Investigación en Red',
+              publishedDate: 'Tiempo Real',
+              timestamp: 'Ahora'
+            })));
+          }
+
+          setState('completed');
+
           addLog(assistantName, answer, {
             type: 'web_search',
             label: `Búsqueda Web: ${searchQuery}`,
             description: webData.quotaFallback ? 'Modo contingencia autónomo' : `Fuentes consultadas: ${webData.sources?.length || 0}`
+          }, {
+            knowledgeSource: 'internet_research',
+            sources: webData.sources && Array.isArray(webData.sources) ? webData.sources : []
           });
 
           // Sincronizar en Firestore si el usuario está autenticado
@@ -747,7 +845,7 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
               setVoiceVolume(0);
             });
           } else {
-            setState('idle');
+            setTimeout(() => setState('idle'), 2000);
           }
           return;
         }
@@ -788,6 +886,13 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       }
 
       setState('thinking');
+
+      // Intentar identificar menciones de temas guardados en memoria central
+      const matchedMemories = memories.filter(m => {
+        const t = (m.topic || '').toLowerCase();
+        return t.length >= 3 && lowerCmd.includes(t);
+      }).map(m => m.topic);
+
       const res = await fetch('/api/assistant/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -796,6 +901,7 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           assistantName,
           preferredModel: activeModel,
           memories: memories.slice(0, 15).map(m => ({ topic: m.topic, content: m.content, category: m.category })),
+          tasks: tasks.map(t => ({ id: t.id, title: t.title, status: t.status, priority: t.priority })),
           history: logs.slice(-5).map(l => ({ role: l.sender.toLowerCase(), text: l.text })),
           customApps,
           customFunctions
@@ -966,7 +1072,17 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
 
       // Respuesta de voz sintetizada natural
       const responseSpeech = data.speech || data.message || `Comprendido. He procesado tu solicitud: ${command}`;
-      addLog(assistantName, responseSpeech, data.action);
+      
+      setState('completed');
+
+      addLog(assistantName, responseSpeech, data.action, {
+        knowledgeSource: data.tool_details?.name === 'web_search' || (data.sources && data.sources.length > 0) 
+          ? 'internet_research' 
+          : 'model_knowledge',
+        recalledMemories: matchedMemories && matchedMemories.length > 0 ? matchedMemories : undefined,
+        sources: data.sources && Array.isArray(data.sources) ? data.sources : undefined,
+        toolDetails: toolName !== 'NONE' ? { name: toolName, params: toolArgs } : undefined
+      });
 
       if (speechSynthesisActive) {
         setState('speaking');
@@ -980,7 +1096,7 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
           }
         });
       } else {
-        setState('idle');
+        setTimeout(() => setState('idle'), 2000);
       }
 
     } catch (err: any) {
@@ -1233,8 +1349,29 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         stopAllAudioCapture();
         try {
           if (event.results && event.results[0] && event.results[0][0]) {
-            const transcript = event.results[0][0].transcript;
+            const transcript = event.results[0][0].transcript.trim();
             addLog('SYSTEM', `🎙️ [VOZ DETECTADA]: "${transcript}"`);
+            
+            const normalized = transcript.toLowerCase().replace(/[.,!¡?¿]/g, '').trim();
+            
+            // Flujo de palabra clave: Usuario dice sólo "Atlas" u "Oye Atlas"
+            if (normalized === 'atlas' || normalized === 'oye atlas' || normalized === 'hola atlas') {
+              sciFiAudio.playConfirmSound();
+              const wakeResponse = '¿Sí? Dime en qué puedo ayudarte.';
+              addLog(assistantName, wakeResponse);
+              if (speechSynthesisActive) {
+                setState('speaking');
+                speakSpanish(wakeResponse, assistantName, voiceSettings, () => {
+                  setState('listening');
+                  // Reabrir micrófono para escuchar la orden siguiente
+                  setTimeout(() => toggleMicrophone(), 200);
+                });
+              } else {
+                setTimeout(() => toggleMicrophone(), 300);
+              }
+              return;
+            }
+
             processCommand(transcript);
           }
         } catch (err: any) {
@@ -1454,15 +1591,20 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       return t;
     });
     setTasks(updated);
-
     try {
-      const taskDoc = doc(db, 'tasks', taskId);
-      const targetTask = updated.find(t => t.id === taskId);
-      if (targetTask) {
-        await updateDoc(taskDoc, { status: targetTask.status });
+      localStorage.setItem('atlas_tasks', JSON.stringify(updated));
+    } catch {}
+
+    if (currentUser) {
+      try {
+        const taskDoc = doc(db, 'users', currentUser.uid, 'tasks', taskId);
+        const targetTask = updated.find(t => t.id === taskId);
+        if (targetTask) {
+          await updateDoc(taskDoc, { status: targetTask.status });
+        }
+      } catch {
+        // Local fallback
       }
-    } catch {
-      // Local fallback
     }
   };
 
@@ -1475,16 +1617,23 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       status: 'pending',
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    setTasks(prev => [newTask, ...prev]);
+    const updatedTasks = [newTask, ...tasks];
+    setTasks(updatedTasks);
     try {
-      await addDoc(collection(db, 'tasks'), {
-        title,
-        priority,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      });
-    } catch {
-      // Local fallback
+      localStorage.setItem('atlas_tasks', JSON.stringify(updatedTasks));
+    } catch {}
+
+    if (currentUser) {
+      try {
+        await addDoc(collection(db, 'users', currentUser.uid, 'tasks'), {
+          title,
+          priority,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        });
+      } catch {
+        // Local fallback
+      }
     }
     addLog('SYSTEM', `📋 [NUEVA TAREA]: '${title}' añadida a la lista.`);
   };
@@ -1502,27 +1651,41 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       confidenceScore: 1.0
     };
-    setMemories(prev => [newMem, ...prev]);
+    const updatedMems = [newMem, ...memories];
+    setMemories(updatedMems);
     try {
-      await addDoc(collection(db, 'memories'), {
-        title,
-        content,
-        category,
-        createdAt: new Date().toISOString()
-      });
-    } catch {
-      // Local fallback
+      localStorage.setItem('atlas_memories', JSON.stringify(updatedMems));
+    } catch {}
+
+    if (currentUser) {
+      try {
+        await addDoc(collection(db, 'users', currentUser.uid, 'memories'), {
+          title,
+          content,
+          category: validCategory,
+          createdAt: new Date().toISOString()
+        });
+      } catch {
+        // Local fallback
+      }
     }
     addLog('SYSTEM', `🧠 [MEMORIA GUARDADA]: '${title}' registrada permanentemente.`);
   };
 
   // Delete memory
   const handleDeleteMemory = async (id: string) => {
-    setMemories(prev => prev.filter(m => m.id !== id));
+    const updated = memories.filter(m => m.id !== id);
+    setMemories(updated);
     try {
-      await deleteDoc(doc(db, 'memories', id));
-    } catch {
-      // Local fallback
+      localStorage.setItem('atlas_memories', JSON.stringify(updated));
+    } catch {}
+
+    if (currentUser) {
+      try {
+        await deleteDoc(doc(db, 'users', currentUser.uid, 'memories', id));
+      } catch {
+        // Local fallback
+      }
     }
   };
 
@@ -1596,9 +1759,15 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         searchResults={searchResults}
         onExecuteBridgeAction={executeRealOSAction}
         bridgeStatus={bridgeStatus}
+        isWsConnected={isWsConnected}
         voiceSettings={voiceSettings}
         activeModel={activeModel}
         onClearLogs={() => setLogs([])}
+        customApps={customApps}
+        onUpdateCustomApps={setCustomApps}
+        customFunctions={customFunctions}
+        onUpdateCustomFunctions={setCustomFunctions}
+        onTestAppOrFunction={handleTestAppOrFunction}
       />
 
         {/* Local PC Bridge Modal */}
@@ -1650,6 +1819,53 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
                   className="px-4 py-2 bg-[#00f2ff] text-black font-bold text-xs rounded-lg cursor-pointer"
                 >
                   CERRAR
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Security / Critical Action Confirmation Modal */}
+        {pendingConfirmation && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-[#050b1a] border-2 border-amber-500/80 rounded-2xl max-w-md w-full p-6 shadow-[0_0_50px_rgba(245,158,11,0.25)] relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-red-500 to-amber-500" />
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/50 flex items-center justify-center text-amber-400 shrink-0">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                    Autorización de Seguridad Requerida
+                  </h3>
+                  <p className="text-[11px] text-amber-400/80 font-mono">
+                    PROTOCOL // CRITICAL_OPERATION_INTERCEPT
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-[#030712] border border-white/10 rounded-xl p-3.5 mb-5 space-y-2">
+                <div className="text-xs text-slate-300 font-sans leading-relaxed">
+                  {pendingConfirmation.description}
+                </div>
+                <div className="text-[10px] font-mono text-slate-400 bg-black/50 px-2.5 py-1 rounded border border-white/5">
+                  <span className="text-amber-400 font-bold">OBJETIVO: </span>
+                  {pendingConfirmation.target}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => handleConfirmation(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-mono text-slate-400 hover:text-white hover:bg-white/5 border border-white/10 transition-all cursor-pointer"
+                >
+                  CANCELAR
+                </button>
+                <button
+                  onClick={() => handleConfirmation(true)}
+                  className="px-4 py-2 rounded-xl text-xs font-mono font-bold bg-gradient-to-r from-amber-500 to-red-500 hover:from-amber-400 hover:to-red-400 text-black shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all cursor-pointer"
+                >
+                  CONFIRMAR Y AUTORIZAR
                 </button>
               </div>
             </div>

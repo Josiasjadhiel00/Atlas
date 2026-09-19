@@ -38,5 +38,11 @@ service cloud.firestore {
     match /sync_devices/{deviceId} {
       allow read, write: if true;
     }
+
+    // Regla de verificación de conectividad
+    match /test/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with assistant configuration and personal metadata",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "theme": { "type": "string", "enum": ["jarvis-cyan", "friday-gold", "edith-stealth", "matrix-green", "cyber-purple"] },
+        "voiceSettings": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "displayName"]
+    },
+    "HistoryEntry": {
+      "title": "HistoryEntry",
+      "description": "Log of user command and assistant response in the HUD",
+      "type": "object",
+      "properties": {
+        "sender": { "type": "string", "enum": ["USER", "SYSTEM", "ATLAS", "JARVIS", "VIERNES", "EDITH"] },
+        "text": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sender", "text"]
+    },
+    "SmartMemory": {
+      "title": "SmartMemory",
+      "description": "Long-term persistent semantic memory stored by ATLAS",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "category": { "type": "string", "enum": ["personal", "work", "preferences", "system", "projects"] },
+        "confidenceScore": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content"]
+    },
+    "ProjectTask": {
+      "title": "ProjectTask",
+      "description": "Task or mission item tracked in the tactical HUD",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "dueDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "status"]
+    },
+    "UserNote": {
+      "title": "UserNote",
+      "description": "Note or document saved by the user via voice or text",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile root document"
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": "HistoryEntry",
+      "description": "User interaction and command history logs"
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": "SmartMemory",
+      "description": "User semantic memories and learned preferences"
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": "ProjectTask",
+      "description": "Tactical project tasks and mission milestones"
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": "UserNote",
+      "description": "User notes and documented files"
+    }
+  }
+}

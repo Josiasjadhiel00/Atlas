@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, Mic, MicOff, Sparkles, Volume2, Bot, User, Trash2, 
-  Copy, Check, Radio, Terminal, ChevronDown, RefreshCw 
+  Copy, Check, Radio, Terminal, ChevronDown, RefreshCw,
+  Globe, Cpu, ExternalLink, Brain, Wrench, ShieldAlert
 } from 'lucide-react';
 import { AssistantLogEntry, AssistantState, AssistantVoiceName, VoiceSettings } from '../../types';
 import { sciFiAudio, speakSpanish } from '../../utils/audioSynth';
@@ -57,8 +58,8 @@ export const AtlasConversationView: React.FC<AtlasConversationViewProps> = ({
   };
 
   const suggestedPrompts = [
+    '¿Cómo describirías tu personalidad y estilo de trabajo?',
     '¿Cuál es el estado de mis proyectos y tareas pendientes?',
-    'Busca en internet las últimas novedades de inteligencia artificial',
     'Ayúdame a optimizar una arquitectura de software full-stack',
     'Dame un diagnóstico completo de telemetría y conexión'
   ];
@@ -86,12 +87,46 @@ export const AtlasConversationView: React.FC<AtlasConversationViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {state !== 'idle' && (
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00f2ff15] border border-[#00f2ff66] text-[#00f2ff] text-xs font-mono animate-pulse">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#00f2ff] animate-ping" />
-              <span>{state === 'thinking' ? 'RAZONANDO...' : state === 'speaking' ? 'HABLANDO...' : 'ESCUCHANDO...'}</span>
-            </div>
-          )}
+          {(() => {
+            let label = null;
+            let badgeClass = '';
+            let dotClass = '';
+
+            if (state === 'listening' || isListening) {
+              label = 'ATLAS • Escuchando';
+              badgeClass = 'bg-amber-500/20 border-amber-400 text-amber-300';
+              dotClass = 'bg-amber-400 animate-ping';
+            } else if (state === 'thinking') {
+              label = 'ATLAS • Procesando';
+              badgeClass = 'bg-cyan-500/20 border-cyan-400 text-cyan-300';
+              dotClass = 'bg-cyan-400 animate-pulse';
+            } else if (state === 'searching') {
+              label = 'ATLAS • Investigando';
+              badgeClass = 'bg-indigo-500/25 border-indigo-400 text-indigo-300';
+              dotClass = 'bg-indigo-400 animate-ping';
+            } else if (state === 'executing') {
+              label = 'ATLAS • Ejecutando acción';
+              badgeClass = 'bg-emerald-500/25 border-emerald-400 text-emerald-300';
+              dotClass = 'bg-emerald-400 animate-pulse';
+            } else if (state === 'completed') {
+              label = 'ATLAS • Completado';
+              badgeClass = 'bg-emerald-500/20 border-emerald-400 text-emerald-300';
+              dotClass = 'bg-emerald-400';
+            } else if (state === 'speaking') {
+              label = 'ATLAS • Respondiendo';
+              badgeClass = 'bg-cyan-500/15 border-[#00f2ff] text-[#00f2ff]';
+              dotClass = 'bg-[#00f2ff] animate-pulse';
+            }
+
+            if (!label) return null;
+
+            return (
+              <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-mono transition-all duration-200 ${badgeClass}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+                <span className="font-semibold">{label}</span>
+              </div>
+            );
+          })()}
 
           {onClearLogs && (
             <button
@@ -115,10 +150,13 @@ export const AtlasConversationView: React.FC<AtlasConversationViewProps> = ({
             <div className="w-16 h-16 rounded-2xl bg-[#00f2ff10] border border-[#00f2ff33] flex items-center justify-center text-[#00f2ff] shadow-[0_0_20px_rgba(0,242,255,0.2)]">
               <Bot className="w-8 h-8 animate-pulse" />
             </div>
-            <div className="max-w-md">
-              <h3 className="text-base font-bold text-white">Canal de comunicación listo</h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Haz una pregunta, solicita investigación web o pide a ATLAS que ejecute tareas en tus proyectos o en tu ordenador.
+            <div className="max-w-md space-y-2">
+              <h3 className="text-base font-bold text-white">A.T.L.A.S. Core listo</h3>
+              <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                Educado, inteligente, directo, comprensivo, audaz, relajado, introvertido, divertido y autosuficiente.
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Pregúntame lo que necesites o pídeme ejecutar órdenes en tu PC. Yo me encargo del trabajo pesado sin rodeos.
               </p>
             </div>
           </div>
@@ -168,9 +206,71 @@ export const AtlasConversationView: React.FC<AtlasConversationViewProps> = ({
                     </span>
                   </div>
 
+                  {/* Source & Memory Indicators */}
+                  {!isUser && (
+                    <div className="space-y-1.5 pt-0.5">
+                      {/* Recalled Memories Badge */}
+                      {log.recalledMemories && log.recalledMemories.length > 0 && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#00f2ff12] border border-[#00f2ff33] text-[#00f2ff] text-[10px] font-mono">
+                          <Brain className="w-3 h-3 text-[#00f2ff] shrink-0" />
+                          <span className="font-semibold">MEMORIA CENTRAL RECUPERADA:</span>
+                          <span className="text-slate-300 italic truncate">{log.recalledMemories.join(', ')}</span>
+                        </div>
+                      )}
+
+                      {/* Internet Research vs Model Knowledge distinction */}
+                      {(log.knowledgeSource === 'internet_research' || (log.sources && log.sources.length > 0) || log.action?.type === 'web_search') ? (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-indigo-500/15 border border-indigo-400/40 text-indigo-300 text-[10px] font-mono">
+                          <Globe className="w-3 h-3 text-indigo-400 shrink-0" />
+                          <span className="font-bold tracking-wide">INFORMACIÓN OBTENIDA MEDIANTE INTERNET (TIEMPO REAL)</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-950/40 border border-cyan-800/30 text-cyan-300/80 text-[9px] font-mono w-fit">
+                          <Cpu className="w-2.5 h-2.5 text-cyan-400" />
+                          <span>CONOCIMIENTO DEL MODELO // NÚCLEO ATLAS</span>
+                        </div>
+                      )}
+
+                      {/* Tool Execution Tag */}
+                      {log.toolDetails && (
+                        <div className="flex items-center justify-between px-2.5 py-1 rounded bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono">
+                          <div className="flex items-center gap-1.5">
+                            <Wrench className="w-3 h-3 text-emerald-400" />
+                            <span className="font-semibold">HERRAMIENTA EJECUTADA:</span>
+                            <span className="text-white font-bold">{log.toolDetails.name}</span>
+                          </div>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 uppercase">Éxito</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <p className="text-xs sm:text-sm font-sans leading-relaxed whitespace-pre-wrap">
                     {log.text}
                   </p>
+
+                  {/* Sources Chips */}
+                  {!isUser && log.sources && log.sources.length > 0 && (
+                    <div className="pt-2 border-t border-white/10 space-y-1.5">
+                      <div className="text-[10px] font-mono text-slate-400 flex items-center gap-1">
+                        <Globe className="w-3 h-3 text-[#00f2ff]" /> Fuentes de Internet consultadas:
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {log.sources.map((src, sIdx) => (
+                          <a
+                            key={sIdx}
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-[10px] bg-slate-900/90 hover:bg-[#00f2ff15] border border-slate-700 hover:border-[#00f2ff55] px-2 py-0.5 rounded text-cyan-300 hover:text-white transition-all cursor-pointer"
+                          >
+                            <ExternalLink className="w-2.5 h-2.5" />
+                            <span className="truncate max-w-[200px]">{src.title}</span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Actions footer for assistant messages */}
                   {!isUser && (

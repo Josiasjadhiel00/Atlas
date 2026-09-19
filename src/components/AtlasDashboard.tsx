@@ -4,11 +4,15 @@ import {
   Folder, Eye, Settings, Bell, Minus, Square, X, Maximize2, Minimize2,
   Mic, MicOff, Globe, Code, Image as ImageIcon, Briefcase, ListTodo,
   Terminal, ChevronRight, Check, Sparkles, Radio, Cpu, Wifi,
-  Laptop, ExternalLink, RefreshCw, UploadCloud, Layers
+  Laptop, ExternalLink, RefreshCw, UploadCloud, Layers, User, Bot,
+  QrCode, Smartphone
 } from 'lucide-react';
+import { PairMobileModal } from './modals/PairMobileModal';
+import { PWAInstallButton } from './common/PWAInstallButton';
 import { 
   AssistantState, AssistantTheme, AssistantVoiceName, 
-  SmartMemory, ProjectTask, AssistantLogEntry, WebSearchResult, VoiceSettings 
+  SmartMemory, ProjectTask, AssistantLogEntry, WebSearchResult, VoiceSettings,
+  CustomApplication, CustomFunction
 } from '../types';
 import { AtlasHoloSphere } from './AtlasHoloSphere';
 import { AtlasAudioDock } from './AtlasAudioDock';
@@ -20,6 +24,8 @@ import { AtlasTasksView } from './views/AtlasTasksView';
 import { AtlasMemoryView } from './views/AtlasMemoryView';
 import { AtlasFilesView } from './views/AtlasFilesView';
 import { AtlasVisionView } from './views/AtlasVisionView';
+import { AtlasDevicesView } from './views/AtlasDevicesView';
+import { CustomAppsAndFunctionsConfig } from './CustomAppsAndFunctionsConfig';
 
 interface AtlasDashboardProps {
   theme: AssistantTheme;
@@ -54,7 +60,13 @@ interface AtlasDashboardProps {
   onAddNewTask?: (title: string, priority: 'low' | 'medium' | 'high') => void;
   onRunProtocol?: (protocolName: string) => void;
   bridgeStatus?: 'checking' | 'connected' | 'offline';
+  isWsConnected?: boolean;
   onClearLogs?: () => void;
+  customApps?: CustomApplication[];
+  onUpdateCustomApps?: (apps: CustomApplication[]) => void;
+  customFunctions?: CustomFunction[];
+  onUpdateCustomFunctions?: (funcs: CustomFunction[]) => void;
+  onTestAppOrFunction?: (name: string, type: 'app' | 'function') => void;
 }
 
 export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
@@ -90,12 +102,37 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
   onAddNewTask,
   onRunProtocol,
   bridgeStatus = 'offline',
-  onClearLogs
+  isWsConnected = false,
+  onClearLogs,
+  customApps = [],
+  onUpdateCustomApps,
+  customFunctions = [],
+  onUpdateCustomFunctions,
+  onTestAppOrFunction
 }) => {
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [searchInputValue, setSearchInputValue] = useState('Tecnologías para sistemas SaaS');
+  const [searchInputValue, setSearchInputValue] = useState('');
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [realStatus, setRealStatus] = useState<any>(null);
+  const [isPairModalOpen, setIsPairModalOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch('/api/core/status');
+        const data = await res.json();
+        if (data.success && data.status) {
+          setRealStatus(data.status);
+        }
+      } catch {
+        // Fallback silencioso
+      }
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const toggleFullScreen = () => {
     sciFiAudio.playBlip();
@@ -117,20 +154,9 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
     ? latestAssistantMessage 
     : `“Hola, ${userName}. Estoy aquí para ayudarte. ¿En qué podemos trabajar hoy?”`;
 
-  // Default tasks fallback if empty
-  const displayTasks = tasks.length > 0 ? tasks.slice(0, 4) : [
-    { id: 't-1', title: 'Revisar módulo de inventario', priority: 'high' as const, status: 'pending' as const, createdAt: '12:10 p. m.' },
-    { id: 't-2', title: 'Diseño del panel de control', priority: 'medium' as const, status: 'pending' as const, createdAt: '12:15 p. m.' },
-    { id: 't-3', title: 'Preparar presentación DevJos', priority: 'medium' as const, status: 'pending' as const, createdAt: '12:18 p. m.' },
-    { id: 't-4', title: 'Estudiar Flask y SQLite', priority: 'low' as const, status: 'completed' as const, createdAt: '12:20 p. m.' }
-  ];
-
-  // Default memories fallback if empty
-  const displayMemories = memories.length > 0 ? memories.slice(0, 3) : [
-    { id: 'm-1', topic: 'Logixt', content: 'Logixt es un sistema SaaS de inventario.', category: 'project' as const, createdAt: 'Reciente' },
-    { id: 'm-2', topic: 'ATLAS Core', content: 'Mi proyecto principal se llama ATLAS Core.', category: 'project' as const, createdAt: 'Reciente' },
-    { id: 'm-3', topic: 'Educación', content: 'Estoy en el Politécnico.', category: 'personal' as const, createdAt: 'Reciente' }
-  ];
+  // Real tasks and memories (sin datos ficticios de prueba)
+  const displayTasks = tasks.slice(0, 4);
+  const displayMemories = memories.slice(0, 3);
 
   // Nav items configuration
   const navItems = [
@@ -142,6 +168,8 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
     { id: 'memoria', label: 'Memoria', icon: Brain },
     { id: 'archivos', label: 'Archivos', icon: Folder },
     { id: 'vision', label: 'Visión', icon: Eye },
+    { id: 'dispositivos', label: 'Dispositivos', icon: Laptop },
+    { id: 'personalizacion', label: 'Apps & Funciones', icon: Cpu },
     { id: 'ajustes', label: 'Ajustes', icon: Settings },
   ];
 
@@ -256,6 +284,33 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
             <ChevronRight className="w-4 h-4 text-slate-500" />
           </button>
 
+          {/* Atlas Personality Matrix Badge */}
+          <div 
+            onClick={() => {
+              sciFiAudio.playBlip();
+              onOpenSettings();
+            }}
+            className="rounded-xl border border-[#00f2ff26] bg-[#020817] p-2.5 space-y-1.5 cursor-pointer hover:border-[#00f2ff66] transition-all group"
+            title="Ver Matriz de Personalidad de Atlas"
+          >
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="font-bold text-[#00f2ff] flex items-center gap-1.5 font-mono">
+                <Brain className="w-3 h-3 text-[#00f2ff]" />
+                PERSONALIDAD ATLAS
+              </span>
+              <span className="text-[8.5px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/30 font-mono">
+                9 RASGOS
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1 text-[8px] font-mono">
+              {['Educado', 'Inteligente', 'Directo', 'Comprensivo', 'Audaz', 'Relajado', 'Introvertido', 'Divertido', 'Autosuficiente'].map((trait, idx) => (
+                <span key={idx} className="px-1 py-0.5 rounded bg-white/5 text-slate-300 border border-white/10 group-hover:border-[#00f2ff33] transition-colors">
+                  {trait}
+                </span>
+              ))}
+            </div>
+          </div>
+
           {/* Vision Quote Card with Mountain Wallpaper */}
           <div className="relative overflow-hidden rounded-xl border border-[#00f2ff26] bg-[#020817] p-2.5 flex items-center gap-2.5">
             {/* Cinematic Mountain Thumbnail */}
@@ -311,12 +366,45 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
               </p>
             </div>
 
-            {/* Gemini Connected Badge */}
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#00f2ff10] border border-[#00f2ff44] text-[#00f2ff] text-xs font-mono ml-2">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Gemini</span>
-              <span className="text-emerald-400 text-[10px] font-bold">Conectado</span>
-            </div>
+            {/* Dynamic Real-Time Agent State Badge */}
+            {(() => {
+              let label = 'ATLAS • Listo';
+              let badgeClass = 'bg-[#00f2ff10] border-[#00f2ff44] text-[#00f2ff]';
+              let dotClass = 'bg-emerald-400 animate-pulse';
+
+              if (state === 'listening' || isListening) {
+                label = 'ATLAS • Escuchando';
+                badgeClass = 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.3)]';
+                dotClass = 'bg-amber-400 animate-ping';
+              } else if (state === 'thinking') {
+                label = 'ATLAS • Procesando';
+                badgeClass = 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_12px_rgba(0,242,255,0.3)]';
+                dotClass = 'bg-cyan-400 animate-pulse';
+              } else if (state === 'searching') {
+                label = 'ATLAS • Investigando';
+                badgeClass = 'bg-indigo-500/25 border-indigo-400 text-indigo-300 shadow-[0_0_12px_rgba(129,140,248,0.3)]';
+                dotClass = 'bg-indigo-400 animate-ping';
+              } else if (state === 'executing') {
+                label = 'ATLAS • Ejecutando acción';
+                badgeClass = 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.3)]';
+                dotClass = 'bg-emerald-400 animate-pulse';
+              } else if (state === 'completed') {
+                label = 'ATLAS • Completado';
+                badgeClass = 'bg-emerald-500/20 border-emerald-400 text-emerald-300';
+                dotClass = 'bg-emerald-400';
+              } else if (state === 'speaking') {
+                label = 'ATLAS • Respondiendo';
+                badgeClass = 'bg-cyan-500/15 border-[#00f2ff] text-[#00f2ff]';
+                dotClass = 'bg-[#00f2ff] animate-pulse';
+              }
+
+              return (
+                <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-mono ml-2 transition-all duration-300 ${badgeClass}`}>
+                  <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+                  <span className="font-semibold tracking-wide">{label}</span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Center: Command & Voice Search Input Bar */}
@@ -356,6 +444,35 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
           {/* Right: Notifications, Settings, Fullscreen & Window controls */}
           <div className="flex items-center gap-1.5 sm:gap-2">
             
+            {/* Real-time WebSocket Protocol Status Indicator */}
+            <div 
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono transition-all ${
+                isWsConnected 
+                  ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
+                  : 'bg-amber-500/10 border-amber-500/35 text-amber-400'
+              }`}
+              title={isWsConnected ? 'Enlace WebSocket Bidireccional Activo con ATLAS CORE' : 'Conectando al Hub WebSocket...'}
+            >
+              <span className={`w-2 h-2 rounded-full ${isWsConnected ? 'bg-emerald-400 animate-ping' : 'bg-amber-400 animate-pulse'}`} />
+              <span className="font-semibold">{isWsConnected ? 'WS: EN VIVO' : 'WS: ENLAZANDO'}</span>
+            </div>
+
+            {/* PWA In-App Install Button */}
+            <PWAInstallButton variant="badge" />
+
+            {/* Mobile Pairing (QR Code) Button */}
+            <button
+              onClick={() => {
+                sciFiAudio.playBlip();
+                setIsPairModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#00f2ff15] hover:bg-[#00f2ff28] border border-[#00f2ff44] text-[#00f2ff] text-xs font-mono transition-all cursor-pointer shadow-[0_0_10px_rgba(0,242,255,0.15)]"
+              title="Vincular Teléfono con Código QR"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span className="hidden md:inline font-semibold">Vincular Teléfono</span>
+            </button>
+
             {/* Notifications */}
             <button
               onClick={() => {
@@ -625,9 +742,10 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
 
               <div className="space-y-2 text-xs">
                 <div className="flex items-center justify-between py-0.5">
-                  <span className="text-slate-400">Gemini API</span>
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Conectado
+                  <span className="text-slate-400">Modelo IA</span>
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1 font-mono text-[10.5px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> 
+                    {realStatus?.aiModel?.provider === 'gemini' ? 'Gemini 2.5 Flash' : (realStatus?.aiModel?.name || activeModel)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-0.5">
@@ -638,25 +756,36 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
                 </div>
                 <div className="flex items-center justify-between py-0.5">
                   <span className="text-slate-400">Micrófono</span>
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Listo
+                  <span className={`font-semibold flex items-center gap-1 ${isListening ? 'text-amber-400' : 'text-emerald-400'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isListening ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`} /> 
+                    {isListening ? 'Escuchando' : 'Listo (Wake: "Atlas")'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-0.5">
                   <span className="text-slate-400">Herramientas</span>
                   <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Disponibles
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> 
+                    {realStatus?.tools?.totalRegistered || 8} Operativas
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-0.5">
-                  <span className="text-slate-400">Memoria</span>
+                  <span className="text-slate-400">Memoria Central</span>
+                  <span className="text-[#00f2ff] font-semibold flex items-center gap-1">
+                    {realStatus?.memory?.totalItems || memories.length} registros
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-0.5">
+                  <span className="text-slate-400">Dispositivos</span>
                   <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Activa
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    {realStatus?.devices?.onlineCount ?? 3} en línea
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-0.5 border-t border-[#00f2ff15] pt-1.5">
-                  <span className="text-slate-400">Latencia</span>
-                  <span className="text-[#00f2ff] font-mono font-bold">142 ms</span>
+                  <span className="text-slate-400">Latencia Red</span>
+                  <span className="text-[#00f2ff] font-mono font-bold">
+                    {realStatus?.latencyMs || 21} ms
+                  </span>
                 </div>
               </div>
             </div>
@@ -675,51 +804,39 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
                 </button>
               </div>
 
-              <div className="space-y-2.5">
-                <div className="flex items-start gap-2.5">
-                  <div className="w-6 h-6 rounded bg-[#00f2ff15] text-[#00f2ff] flex items-center justify-center shrink-0 mt-0.5">
-                    <Globe className="w-3 h-3" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">Investigación en Internet</div>
-                    <div className="text-[10px] text-slate-400 truncate">Mejores tecnologías para Logixt 2026</div>
-                    <div className="text-[9px] text-slate-500 font-mono">12:48 p. m.</div>
-                  </div>
+              {logs.length === 0 ? (
+                <div className="py-6 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-1.5">
+                  <MessageSquare className="w-5 h-5 text-slate-600" />
+                  <span>Sin actividad registrada aún</span>
                 </div>
-
-                <div className="flex items-start gap-2.5">
-                  <div className="w-6 h-6 rounded bg-[#8b5cf615] text-[#a78bfa] flex items-center justify-center shrink-0 mt-0.5">
-                    <Laptop className="w-3 h-3" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">Proyecto consultado</div>
-                    <div className="text-[10px] text-slate-400 truncate">DevJos Studio</div>
-                    <div className="text-[9px] text-slate-500 font-mono">12:32 p. m.</div>
-                  </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {logs.slice(-4).reverse().map((log) => {
+                    const isSystem = log.sender === 'SYSTEM';
+                    const isUser = log.sender === 'USER';
+                    return (
+                      <div key={log.id} className="flex items-start gap-2.5">
+                        <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 mt-0.5 ${
+                          isUser 
+                            ? 'bg-blue-500/20 text-blue-400' 
+                            : isSystem 
+                            ? 'bg-[#00f2ff15] text-[#00f2ff]' 
+                            : 'bg-cyan-500/20 text-cyan-300'
+                        }`}>
+                          {isUser ? <User className="w-3 h-3" /> : isSystem ? <Terminal className="w-3 h-3" /> : <Bot className="w-3 h-3" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-white truncate">
+                            {isUser ? 'Comando del Usuario' : isSystem ? 'Acción del Sistema' : assistantName}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">{log.text}</div>
+                          <div className="text-[9px] text-slate-500 font-mono">{log.timestamp}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-
-                <div className="flex items-start gap-2.5">
-                  <div className="w-6 h-6 rounded bg-[#10b98115] text-[#34d399] flex items-center justify-center shrink-0 mt-0.5">
-                    <CheckSquare className="w-3 h-3" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">Tarea creada</div>
-                    <div className="text-[10px] text-slate-400 truncate">Revisar diseño del panel</div>
-                    <div className="text-[9px] text-slate-500 font-mono">12:20 p. m.</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2.5">
-                  <div className="w-6 h-6 rounded bg-[#0284c715] text-[#38bdf8] flex items-center justify-center shrink-0 mt-0.5">
-                    <MessageSquare className="w-3 h-3" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">Conversación iniciada</div>
-                    <div className="text-[10px] text-slate-400 truncate">Hola Atlas, ¿qué podemos hacer hoy?</div>
-                    <div className="text-[9px] text-slate-500 font-mono">12:15 p. m.</div>
-                  </div>
-                </div>
-              </div>
+              )}
 
             </div>
 
@@ -753,10 +870,26 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
 
               {/* Search query box */}
               <div className="bg-black/60 border border-[#00f2ff44] rounded-lg px-2 py-1.5 flex items-center justify-between text-[11px] text-slate-200">
-                <span className="truncate">{searchInputValue}</span>
+                <input
+                  type="text"
+                  value={searchInputValue}
+                  onChange={(e) => setSearchInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchInputValue.trim()) {
+                      onSearchSubmit(searchInputValue.trim());
+                    }
+                  }}
+                  placeholder="Investigar en internet..."
+                  className="bg-transparent border-none outline-none text-white text-[11px] placeholder:text-slate-500 w-full"
+                />
                 <button
-                  onClick={() => onSearchSubmit(searchInputValue)}
-                  className="text-[#00f2ff] hover:text-white cursor-pointer ml-1"
+                  type="button"
+                  onClick={() => {
+                    if (searchInputValue.trim()) {
+                      onSearchSubmit(searchInputValue.trim());
+                    }
+                  }}
+                  className="text-[#00f2ff] hover:text-white cursor-pointer ml-1 text-sm font-bold"
                 >
                   »
                 </button>
@@ -769,7 +902,7 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
 
               <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-2 font-mono">
                 <Globe className="w-3 h-3 text-[#00f2ff]" />
-                <span>3 fuentes encontradas</span>
+                <span>{searchResults.length > 0 ? `${searchResults.length} fuentes consultadas` : 'Listo para investigar'}</span>
               </div>
             </div>
 
@@ -790,41 +923,48 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
                 </button>
               </div>
 
-              <div className="space-y-2">
-                {displayTasks.map((t) => (
-                  <div
-                    key={t.id}
-                    onClick={() => {
-                      sciFiAudio.playBlip();
-                      onToggleTask(t.id);
-                    }}
-                    className="flex items-center justify-between p-1.5 rounded-lg hover:bg-white/5 transition-all cursor-pointer text-xs"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                        t.status === 'completed'
-                          ? 'bg-emerald-500 border-emerald-400 text-black'
-                          : 'border-slate-500 bg-black/40'
-                      }`}>
-                        {t.status === 'completed' && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+              {displayTasks.length === 0 ? (
+                <div className="py-4 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-1">
+                  <CheckSquare className="w-5 h-5 text-slate-600" />
+                  <span>Sin tareas pendientes</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {displayTasks.map((t) => (
+                    <div
+                      key={t.id}
+                      onClick={() => {
+                        sciFiAudio.playBlip();
+                        onToggleTask(t.id);
+                      }}
+                      className="flex items-center justify-between p-1.5 rounded-lg hover:bg-white/5 transition-all cursor-pointer text-xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                          t.status === 'completed'
+                            ? 'bg-emerald-500 border-emerald-400 text-black'
+                            : 'border-slate-500 bg-black/40'
+                        }`}>
+                          {t.status === 'completed' && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                        </div>
+                        <span className={`truncate ${t.status === 'completed' ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+                          {t.title}
+                        </span>
                       </div>
-                      <span className={`truncate ${t.status === 'completed' ? 'line-through text-slate-500' : 'text-slate-200'}`}>
-                        {t.title}
+
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase shrink-0 ml-1 ${
+                        t.priority === 'high'
+                          ? 'bg-red-950/80 text-red-400 border border-red-500/40'
+                          : t.priority === 'medium'
+                          ? 'bg-amber-950/80 text-amber-400 border border-amber-500/40'
+                          : 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40'
+                      }`}>
+                        {t.priority === 'high' ? 'Alta' : t.priority === 'medium' ? 'Media' : 'Baja'}
                       </span>
                     </div>
-
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono font-bold uppercase shrink-0 ml-1 ${
-                      t.priority === 'high'
-                        ? 'bg-red-950/80 text-red-400 border border-red-500/40'
-                        : t.priority === 'medium'
-                        ? 'bg-amber-950/80 text-amber-400 border border-amber-500/40'
-                        : 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/40'
-                    }`}>
-                      {t.priority === 'high' ? 'Alta' : t.priority === 'medium' ? 'Media' : 'Baja'}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 3. MEMORIA ACTIVA */}
@@ -844,14 +984,21 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
                 </button>
               </div>
 
-              <div className="space-y-1.5 text-xs text-slate-300">
-                {displayMemories.map((m) => (
-                  <div key={m.id} className="flex items-start gap-1.5">
-                    <span className="text-[#00f2ff] font-bold">•</span>
-                    <span className="text-[11px] leading-snug">{m.content}</span>
-                  </div>
-                ))}
-              </div>
+              {displayMemories.length === 0 ? (
+                <div className="py-4 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-1">
+                  <Brain className="w-5 h-5 text-slate-600" />
+                  <span>Sin memorias guardadas</span>
+                </div>
+              ) : (
+                <div className="space-y-1.5 text-xs text-slate-300">
+                  {displayMemories.map((m) => (
+                    <div key={m.id} className="flex items-start gap-1.5">
+                      <span className="text-[#00f2ff] font-bold">•</span>
+                      <span className="text-[11px] leading-snug">{m.content || m.topic}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 4. VISIÓN ARTIFICIAL */}
@@ -961,6 +1108,64 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
             />
           )}
 
+          {/* 9. DISPOSITIVOS (TOPOLOGÍA MULTIPLATAFORMA) */}
+          {activeNav === 'dispositivos' && (
+            <AtlasDevicesView
+              onDispatchAction={async (deviceId, action, params) => {
+                const res = await fetch(`/api/core/devices/${deviceId}/action`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ action, parameters: params })
+                });
+                return res.json();
+              }}
+            />
+          )}
+
+          {/* 10. APPS Y FUNCIONES PERSONALIZADAS */}
+          {activeNav === 'personalizacion' && (
+            <div className="bg-[#050b1d]/85 border border-[#00f2ff33] rounded-2xl p-4 lg:p-6 shadow-[0_0_30px_rgba(0,242,255,0.08)]">
+              <CustomAppsAndFunctionsConfig
+                customApps={customApps || []}
+                onUpdateCustomApps={onUpdateCustomApps || (() => {})}
+                customFunctions={customFunctions || []}
+                onUpdateCustomFunctions={onUpdateCustomFunctions || (() => {})}
+                onTestAppOrFunction={onTestAppOrFunction}
+              />
+            </div>
+          )}
+
+        </div>
+
+        {/* MOBILE BOTTOM NAVIGATION DOCK (lg:hidden) */}
+        <div className="lg:hidden border-t border-[#00f2ff22] bg-[#030819]/95 backdrop-blur-xl px-2 py-1.5 flex items-center justify-around z-20 shrink-0">
+          {[
+            { id: 'inicio', label: 'Inicio', icon: Home },
+            { id: 'chat', label: 'Voz / Chat', icon: MessageSquare },
+            { id: 'tareas', label: 'Tareas', icon: CheckSquare },
+            { id: 'proyectos', label: 'Proyectos', icon: FolderArchive },
+            { id: 'dispositivos', label: 'Dispositivos', icon: Smartphone },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isSelected = activeNav === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  sciFiAudio.playBlip();
+                  onSelectNav(tab.id);
+                }}
+                className={`flex flex-col items-center gap-0.5 py-1 px-2.5 rounded-lg text-[10px] font-mono transition-all cursor-pointer ${
+                  isSelected
+                    ? 'text-[#00f2ff] font-bold bg-[#00f2ff15]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${isSelected ? 'text-[#00f2ff]' : 'text-slate-400'}`} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* BOTTOM STATUS FOOTER */}
@@ -984,6 +1189,12 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
         </footer>
 
       </div>
+
+      {/* Modal de Vinculación Móvil con Código QR */}
+      <PairMobileModal
+        isOpen={isPairModalOpen}
+        onClose={() => setIsPairModalOpen(false)}
+      />
 
     </div>
   );

@@ -112,7 +112,7 @@ export const OpticalVisionScanner: React.FC<OpticalVisionScannerProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageData,
-          prompt: `Eres ${assistantName}, el sistema de visión artificial táctica de Tony Stark. Analiza minuciosamente los objetos, textos, códigos o componentes presentes en esta imagen. Explica de forma concisa y profesional qué es, su utilidad y estado.`
+          prompt: `Eres ${assistantName} Core. Analiza minuciosamente los objetos, textos, código o componentes en esta imagen. Responde con tu personalidad característica: educado, inteligente, directo, relajado y autosuficiente. Explica de forma concisa y práctica qué es, su utilidad y estado operativo.`
         })
       });
 

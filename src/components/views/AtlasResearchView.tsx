@@ -17,29 +17,9 @@ export const AtlasResearchView: React.FC<AtlasResearchViewProps> = ({
   searchResults = [],
   isSearching = false
 }) => {
-  const [query, setQuery] = useState('Tendencias de inteligencia artificial y agentes autónomos 2026');
+  const [query, setQuery] = useState('');
 
-  // Fallback demo results if no search has been executed yet
-  const displayResults = searchResults.length > 0 ? searchResults : [
-    {
-      title: 'Avances en Modelos Multimodales y Agentes Autónomos en Tiempo Real',
-      url: 'https://deepmind.google/technologies/gemini/',
-      snippet: 'La nueva generación de modelos Gemini incorpora capacidades de razonamiento profundo, interacción de voz con baja latencia y function calling integrado para control de entornos locales y en la nube.',
-      publishedDate: 'Septiembre 2026'
-    },
-    {
-      title: 'Arquitectura de Asistentes Personales con Node.js y Modelos Locales Ollama',
-      url: 'https://ollama.com/library',
-      snippet: 'Guía exhaustiva para desplegar modelos de lenguaje como Llama y Qwen de forma local en equipos de escritorio, conectándolos mediante APIs REST y WebSockets con interfaces tácticas.',
-      publishedDate: 'Agosto 2026'
-    },
-    {
-      title: 'Sistemas Multiplataforma para Automatización de Tareas de Escritorio',
-      url: 'https://github.com/topics/desktop-automation',
-      snippet: 'Patrones de diseño de seguridad mediante listas blancas de aplicaciones y directorios para evitar ejecuciones accidentales en sistemas operativos Windows, macOS y Linux.',
-      publishedDate: '2026'
-    }
-  ];
+  const displayResults = searchResults;
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -190,55 +170,69 @@ export const AtlasResearchView: React.FC<AtlasResearchViewProps> = ({
             <span className="text-[10px] font-mono text-[#00f2ff]">INDEXADO CON ÉXITO</span>
           </div>
 
-          <div className="space-y-3">
-            {displayResults.map((result, idx) => (
-              <div
-                key={idx}
-                className="bg-[#050b1d]/85 hover:bg-[#071330] border border-[#00f2ff22] hover:border-[#00f2ff66] rounded-2xl p-4 transition-all shadow-[0_0_20px_rgba(0,0,0,0.3)] space-y-2.5 group"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <span className="text-[10px] font-mono text-[#00f2ff] px-2 py-0.5 rounded-full bg-[#00f2ff10] border border-[#00f2ff33] inline-block mb-1.5">
-                      FUENTE {idx + 1} // {result.publishedDate || 'Actualizado'}
-                    </span>
-                    <h4 className="text-sm font-bold text-white group-hover:text-[#00f2ff] transition-colors leading-snug">
-                      {result.title}
-                    </h4>
+          {displayResults.length === 0 ? (
+            <div className="bg-[#050b1d]/85 border border-[#00f2ff22] rounded-2xl p-12 text-center flex flex-col items-center justify-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-[#00f2ff10] border border-[#00f2ff33] flex items-center justify-center text-[#00f2ff]">
+                <Search className="w-7 h-7" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-sm font-bold text-white uppercase tracking-wider">Radar de Investigación Inactivo</h4>
+                <p className="text-xs text-slate-400 max-w-md">
+                  Introduce una consulta o tema arriba para rastrear fuentes en tiempo real, extraer citas y sintetizar conocimiento con ATLAS.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {displayResults.map((result, idx) => (
+                <div
+                  key={idx}
+                  className="bg-[#050b1d]/85 hover:bg-[#071330] border border-[#00f2ff22] hover:border-[#00f2ff66] rounded-2xl p-4 transition-all shadow-[0_0_20px_rgba(0,0,0,0.3)] space-y-2.5 group"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-mono text-[#00f2ff] px-2 py-0.5 rounded-full bg-[#00f2ff10] border border-[#00f2ff33] inline-block mb-1.5">
+                        FUENTE {idx + 1} // {result.publishedDate || 'Actualizado'}
+                      </span>
+                      <h4 className="text-sm font-bold text-white group-hover:text-[#00f2ff] transition-colors leading-snug">
+                        {result.title}
+                      </h4>
+                    </div>
+
+                    {result.url && (
+                      <a
+                        href={result.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-2 rounded-xl bg-white/5 hover:bg-[#00f2ff22] text-slate-400 hover:text-[#00f2ff] border border-transparent hover:border-[#00f2ff44] transition-all cursor-pointer shrink-0"
+                        title="Abrir enlace original"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
                   </div>
 
-                  {result.url && (
-                    <a
-                      href={result.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 rounded-xl bg-white/5 hover:bg-[#00f2ff22] text-slate-400 hover:text-[#00f2ff] border border-transparent hover:border-[#00f2ff44] transition-all cursor-pointer shrink-0"
-                      title="Abrir enlace original"
+                  <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                    {result.snippet}
+                  </p>
+
+                  <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                    <span className="truncate max-w-md text-slate-400">{result.url}</span>
+                    <button
+                      onClick={() => {
+                        sciFiAudio.playBlip();
+                        onSearch(`Explícame en detalle: ${result.title}`);
+                      }}
+                      className="text-[#00f2ff] hover:underline flex items-center gap-1 cursor-pointer shrink-0"
                     >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  )}
+                      <span>Profundizar con ATLAS</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
-
-                <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                  {result.snippet}
-                </p>
-
-                <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[10px] text-slate-500 font-mono">
-                  <span className="truncate max-w-md text-slate-400">{result.url}</span>
-                  <button
-                    onClick={() => {
-                      sciFiAudio.playBlip();
-                      onSearch(`Explícame en detalle: ${result.title}`);
-                    }}
-                    className="text-[#00f2ff] hover:underline flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    <span>Profundizar con ATLAS</span>
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
         </div>
 

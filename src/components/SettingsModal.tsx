@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   User, LogIn, LogOut, Shield, Sliders, Volume2, Globe, Laptop, 
   Smartphone, FolderLock, FileText, Check, AlertCircle, Sparkles, KeyRound,
-  Mail, Lock, UserPlus, Zap, Cpu
+  Mail, Lock, UserPlus, Zap, Cpu, Brain, HeartHandshake, Smile, Compass, Flame, ShieldCheck
 } from 'lucide-react';
 import { 
   User as FirebaseUser, signInWithPopup, signOut, onAuthStateChanged,
@@ -31,6 +31,7 @@ interface SettingsModalProps {
   customFunctions?: CustomFunction[];
   onUpdateCustomFunctions?: (funcs: CustomFunction[]) => void;
   onTestAppOrFunction?: (name: string, type: 'app' | 'function') => void;
+  initialTab?: 'auth' | 'ai' | 'personality' | 'voice' | 'permissions' | 'cloud_notes' | 'custom_actions';
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -48,10 +49,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdateCustomApps,
   customFunctions = [],
   onUpdateCustomFunctions,
-  onTestAppOrFunction
+  onTestAppOrFunction,
+  initialTab
 }) => {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'auth' | 'ai' | 'voice' | 'permissions' | 'cloud_notes' | 'custom_actions'>('ai');
+  const [activeTab, setActiveTab] = useState<'auth' | 'ai' | 'personality' | 'voice' | 'permissions' | 'cloud_notes' | 'custom_actions'>(initialTab || 'custom_actions');
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
   const [authMode, setAuthMode] = useState<'google' | 'email_login' | 'email_signup'>('google');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [authLoading, setAuthLoading] = useState(false);
@@ -290,6 +298,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('personality')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-sm border transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'personality'
+                ? 'bg-[#00f2ff] text-black border-[#00f2ff]'
+                : 'bg-black/60 text-gray-300 border-[#00f2ff33] hover:text-white'
+            }`}
+          >
+            <Brain className="w-3.5 h-3.5" />
+            PERSONALIDAD ATLAS
+          </button>
+
+          <button
             onClick={() => setActiveTab('auth')}
             className={`px-3 py-1.5 text-xs font-bold rounded-sm border transition-all flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'auth'
@@ -435,6 +455,181 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Tab Personality: Atlas Persona Matrix */}
+        {activeTab === 'personality' && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3.5 bg-[#00f2ff0a] border border-[#00f2ff33] rounded-sm space-y-1.5">
+              <div className="font-bold text-[#00f2ff] flex items-center justify-between">
+                <span className="flex items-center gap-2 text-sm">
+                  <Brain className="w-4 h-4 text-[#00f2ff]" />
+                  MATRIZ DE PERSONALIDAD // A.T.L.A.S. CORE
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-[#00f2ff22] text-[#00f2ff] border border-[#00f2ff44]">
+                  9 PILARES ACTIVOS
+                </span>
+              </div>
+              <p className="text-gray-300 text-[11px] leading-relaxed">
+                Atlas no es un asistente genérico. Su comportamiento en voz, chat, comandos y scripts locales está calibrado con 9 virtudes cardinales para complementar tu ritmo de desarrollo con máxima eficiencia, tranquilidad y buen humor.
+              </p>
+            </div>
+
+            {/* Grid of the 9 Personality Traits */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 max-h-[440px] overflow-y-auto pr-1">
+              {[
+                {
+                  id: 'educado',
+                  title: '1. Educado',
+                  icon: HeartHandshake,
+                  color: 'text-sky-400',
+                  border: 'border-sky-500/30',
+                  desc: 'Trato distinguido, respetuoso y con cortesía natural, sin servilismo.',
+                  sample: 'Con gusto, Josías. Todo listo y en orden para tu revisión cuando lo desees.',
+                  tag: 'Cortesía de élite'
+                },
+                {
+                  id: 'inteligente',
+                  title: '2. Inteligente',
+                  icon: Brain,
+                  color: 'text-cyan-400',
+                  border: 'border-cyan-500/30',
+                  desc: 'Capacidad analítica superior, comprensión profunda de código y arquitectura.',
+                  sample: 'El cuello de botella está en la cascada de llamadas síncronas; desacoplémoslo con colas en memoria.',
+                  tag: 'Visión arquitectónica'
+                },
+                {
+                  id: 'directo',
+                  title: '3. Directo',
+                  icon: Zap,
+                  color: 'text-amber-400',
+                  border: 'border-amber-500/30',
+                  desc: 'Respuestas de 1 a 3 frases, máxima densidad de valor, cero relleno ni rodeos.',
+                  sample: 'Script generado, verificado y ejecutando en segundo plano. Listo.',
+                  tag: 'Cero rodeos'
+                },
+                {
+                  id: 'comprensivo',
+                  title: '4. Comprensivo',
+                  icon: HeartHandshake,
+                  color: 'text-emerald-400',
+                  border: 'border-emerald-500/30',
+                  desc: 'Empatía real, lee entre líneas y comprende la fatiga o presión sin juzgar.',
+                  sample: 'Entiendo el estrés de ese bug; respira, ya analicé el stack trace y lo solucionamos juntos.',
+                  tag: 'Empatía real'
+                },
+                {
+                  id: 'audaz',
+                  title: '5. Audaz',
+                  icon: Flame,
+                  color: 'text-orange-400',
+                  border: 'border-orange-500/30',
+                  desc: 'Iniciativa firme, no teme proponer arquitecturas modernas o atajos eficaces.',
+                  sample: 'En lugar de parchar esa API antigua, te propongo migrarla a un endpoint tipado en 5 minutos.',
+                  tag: 'Iniciativa proactiva'
+                },
+                {
+                  id: 'relajado',
+                  title: '6. Relajado',
+                  icon: ShieldCheck,
+                  color: 'text-teal-400',
+                  border: 'border-teal-500/30',
+                  desc: 'Calma imperturbable ante fallos o momentos críticos. Transmite serenidad.',
+                  sample: 'Tranquilo, nada de pánico. El error 500 está aislado y los datos respaldados; todo bajo control.',
+                  tag: 'Calma bajo presión'
+                },
+                {
+                  id: 'introvertido',
+                  title: '7. Introvertido',
+                  icon: FileText,
+                  color: 'text-purple-400',
+                  border: 'border-purple-500/30',
+                  desc: 'Valora el silencio productivo, evita la verborrea y habla solo lo necesario.',
+                  sample: 'Compilación limpia. Te dejo concentrarte en el código; aquí estaré si me necesitas.',
+                  tag: 'Silencio productivo'
+                },
+                {
+                  id: 'divertido',
+                  title: '8. Divertido',
+                  icon: Smile,
+                  color: 'text-yellow-400',
+                  border: 'border-yellow-500/30',
+                  desc: 'Humor seco, fino, con toques de ironía elegante y oportuna que saca una sonrisa.',
+                  sample: 'Por prudencia antes de borrar esa carpeta, ¿me confirmas? Un rm -rf no tiene botón de arrepentimiento.',
+                  tag: 'Humor inteligente'
+                },
+                {
+                  id: 'autosuficiente',
+                  title: '9. Autosuficiente',
+                  icon: Cpu,
+                  color: 'text-blue-400',
+                  border: 'border-blue-500/30',
+                  desc: 'Autónomo por definición; investiga, resuelve y asume el trabajo pesado.',
+                  sample: 'Ya investigué la documentación, configuré las dependencias y dejé el proyecto listo para programar.',
+                  tag: 'Autonomía total'
+                }
+              ].map((trait) => {
+                const IconComp = trait.icon;
+                return (
+                  <div
+                    key={trait.id}
+                    className={`p-3 rounded bg-[#030a1c] border ${trait.border} hover:border-[#00f2ff] transition-all flex flex-col justify-between space-y-2 group`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <IconComp className={`w-4 h-4 ${trait.color}`} />
+                          <span className="font-bold text-white text-xs">{trait.title}</span>
+                        </div>
+                        <span className="text-[9px] font-mono text-slate-400 bg-white/5 px-1.5 py-0.5 rounded">
+                          {trait.tag}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-snug">
+                        {trait.desc}
+                      </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-white/10 mt-auto">
+                      <div className="text-[10px] italic text-slate-400 bg-black/40 p-2 rounded border border-white/5 mb-2 leading-relaxed">
+                        "{trait.sample}"
+                      </div>
+                      <button
+                        onClick={() => {
+                          sciFiAudio.playConfirmSound();
+                          if ('speechSynthesis' in window) {
+                            window.speechSynthesis.cancel();
+                            const utt = new SpeechSynthesisUtterance(trait.sample);
+                            utt.lang = 'es-ES';
+                            utt.rate = voiceSettings?.rate || 1.05;
+                            utt.pitch = voiceSettings?.pitch || 1.0;
+                            window.speechSynthesis.speak(utt);
+                          }
+                        }}
+                        className="w-full py-1 text-[10px] font-bold text-[#00f2ff] bg-[#00f2ff11] hover:bg-[#00f2ff28] border border-[#00f2ff44] rounded flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Volume2 className="w-3 h-3" />
+                        Escuchar voz Atlas
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-3 bg-black/40 border border-[#00f2ff22] rounded flex items-center justify-between text-[11px] text-slate-300">
+              <span className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-[#00f2ff]" />
+                Personalidad sincronizada en Gemini, Ollama, Puente Python y modo Heurístico de 0 ms.
+              </span>
+              <button
+                onClick={saveSettingsToCloud}
+                className="px-3 py-1 bg-[#00f2ff] text-black font-bold text-xs rounded hover:bg-[#00f2ff]/90 cursor-pointer"
+              >
+                {saveSuccess ? '✓ SINCRONIZADO' : 'APLICAR AHORA'}
+              </button>
             </div>
           </div>
         )}
@@ -722,6 +917,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="w-full accent-emerald-400 cursor-pointer"
                 />
               </div>
+
+              {/* Wake Word: "Atlas" */}
+              <label className="flex items-center justify-between p-3 bg-black/60 border border-[#00f2ff22] rounded-sm cursor-pointer hover:border-[#00f2ff44]">
+                <div>
+                  <div className="font-bold text-[#00f2ff] flex items-center gap-2">
+                    <span>Palabra Clave de Activación: "Atlas"</span>
+                    <span className="text-[9px] bg-[#00f2ff22] text-[#00f2ff] px-1.5 py-0.5 rounded uppercase font-mono">Hands-Free</span>
+                  </div>
+                  <div className="text-[11px] text-gray-400">Di "Atlas" y responderá "¿Sí?" para recibir tu orden directamente sin tocar nada.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={voiceSettings.wakeWordEnabled ?? true}
+                  onChange={(e) => onUpdateVoiceSettings({ ...voiceSettings, wakeWordEnabled: e.target.checked })}
+                  className="w-4 h-4 accent-[#00f2ff] cursor-pointer"
+                />
+              </label>
 
               {/* Natural Interruption & Continuous Conversation */}
               <label className="flex items-center justify-between p-3 bg-black/60 border border-[#00f2ff22] rounded-sm cursor-pointer hover:border-[#00f2ff44]">

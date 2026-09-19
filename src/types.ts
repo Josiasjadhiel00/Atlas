@@ -1,5 +1,5 @@
 export type AssistantTheme = 'cyan' | 'gold' | 'emerald';
-export type AssistantState = 'idle' | 'listening' | 'thinking' | 'searching' | 'executing' | 'speaking' | 'error' | 'offline';
+export type AssistantState = 'idle' | 'listening' | 'thinking' | 'searching' | 'executing' | 'speaking' | 'completed' | 'error' | 'offline';
 export type AssistantVoiceName = 'Atlas';
 
 export type AIModelOption = 
@@ -61,7 +61,10 @@ export interface AssistantLogEntry {
   text: string;
   action?: AssistantAction;
   state?: AssistantState;
-  sources?: { title: string; url: string }[];
+  sources?: { title: string; url: string; snippet?: string }[];
+  knowledgeSource?: 'model_knowledge' | 'internet_research' | 'system_action';
+  recalledMemories?: string[];
+  toolDetails?: { name: string; params: any; result?: any };
 }
 
 export interface PythonFileDefinition {
@@ -82,6 +85,7 @@ export interface VoiceSettings {
   autoSpeak: boolean;
   continuousConversation: boolean;
   interruptOnSpeech: boolean;
+  wakeWordEnabled?: boolean;
 }
 
 export interface SecurityPermissions {
@@ -99,6 +103,7 @@ export interface WebSearchResult {
   title: string;
   url: string;
   snippet?: string;
+  publishedDate?: string;
 }
 
 export interface UserNote {
