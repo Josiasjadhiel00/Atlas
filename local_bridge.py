@@ -14,6 +14,7 @@ Para ejecutarlo en tu PC:
 
 import os
 import sys
+import secrets
 import subprocess
 import webbrowser
 import platform
@@ -21,13 +22,30 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 
 PORT = 5000
-HOST = "0.0.0.0"
+# SEGURIDAD: solo localhost. No cambiar a 0.0.0.0 — eso expone el puente
+# a cualquier dispositivo de tu red local.
+HOST = "127.0.0.1"
+
+# SEGURIDAD: token compartido. Si no está en el entorno, se genera uno
+# aleatorio al arrancar y se imprime en consola. Copia ese valor a la
+# variable ATLAS_BRIDGE_TOKEN en tu .env para que server.ts pueda usarlo.
+BRIDGE_TOKEN = os.environ.get("ATLAS_BRIDGE_TOKEN") or secrets.token_hex(24)
+
+# SEGURIDAD: solo se acepta CORS desde el origen real de tu app (evita que
+# una página web cualquiera pueda llamar a este puente desde el navegador
+# de la víctima). Ajusta ATLAS_APP_ORIGIN si tu app corre en otro puerto/host.
+ALLOWED_ORIGIN = os.environ.get("ATLAS_APP_ORIGIN", "http://localhost:3000")
 
 class JarvisBridgeHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '')
+        if origin == ALLOWED_ORIGIN:
+            self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Atlas-Token')
+
+    def _authorized(self):
+        return secrets.compare_digest(self.headers.get('X-Atlas-Token', ''), BRIDGE_TOKEN)
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -54,6 +72,16 @@ class JarvisBridgeHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._send_cors_headers()
+
+        # SEGURIDAD: rechazar cualquier request sin el token correcto antes
+        # de tocar el body o ejecutar nada.
+        if not self._authorized():
+            self.send_response(401)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "No autorizado"}).encode('utf-8'))
+            return
+
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
 
@@ -131,18 +159,13 @@ class JarvisBridgeHandler(BaseHTTPRequestHandler):
                 webbrowser.open(url)
                 res = {"success": True, "url": url, "message": f"URL {url} abierta en navegador"}
 
-            # 5. Ejecutar comando Shell / Terminal arbitrario
-            elif action == "execute_command":
-                cmd = payload.get("command", "")
-                if cmd:
-                    process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    stdout, stderr = process.communicate(timeout=10)
-                    res = {
-                        "success": process.returncode == 0,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "exitCode": process.returncode
-                    }
+            # 5. NOTA DE SEGURIDAD: se eliminó "execute_command" (ejecutaba
+            # cualquier comando de shell recibido por HTTP, sin restricción
+            # de qué se podía correr). Con el token ya activo el riesgo baja
+            # mucho, pero un comando de shell arbitrario sigue siendo
+            # demasiado poder para un endpoint HTTP. Si en el futuro lo
+            # necesitas, hazlo con una lista blanca de comandos permitidos
+            # en vez de aceptar cualquier string.
 
             # 6. Apagar / Reiniciar PC
             elif action == "shutdown_pc":
@@ -180,9 +203,15 @@ def run():
     print("=" * 60)
     print("  🚀 JARVIS // PUENTE LOCAL DE CONTROL DE WINDOWS ACTIVO")
     print("=" * 60)
-    print(f"  ● Escuchando en: http://localhost:{PORT}")
+    print(f"  ● Escuchando en: http://127.0.0.1:{PORT} (solo localhost)")
     print(f"  ● Sistema Operativo: {platform.system()} ({platform.platform()})")
     print(f"  ● Estado: Listo para recibir comandos desde la cabina de JARVIS")
+    if not os.environ.get("ATLAS_BRIDGE_TOKEN"):
+        print("=" * 60)
+        print("  ⚠️  No hay ATLAS_BRIDGE_TOKEN en tu entorno. Se generó uno")
+        print("      temporal para esta sesión. Cópialo a tu .env como:")
+        print(f"      ATLAS_BRIDGE_TOKEN={BRIDGE_TOKEN}")
+        print("      y reinicia server.ts para que puedan hablar entre sí.")
     print("=" * 60)
     print("  Deja esta ventana abierta mientras uses JARVIS.")
     print("=" * 60 + "\n")

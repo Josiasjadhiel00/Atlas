@@ -385,44 +385,75 @@ app.get("/api/ollama/status", async (_req, res) => {
 // =========================================================================
 // LOCAL PC BRIDGE PROXY (127.0.0.1:5000)
 // =========================================================================
+// SEGURIDAD: el puente local solo vive en 127.0.0.1 (ver local_bridge.py/js).
+// No probar 'localhost' por separado evita ambigüedad de resolución DNS.
+const BRIDGE_URL = "http://127.0.0.1:5000";
+
+// SEGURIDAD: lista blanca de acciones que este servidor reenviará al
+// puente local. Cualquier otra cosa que llegue en el body se descarta antes
+// de tocar la red — así aunque un endpoint de arriba tenga un bug, no se
+// puede colar una acción nueva o peligrosa por aquí.
+const ALLOWED_BRIDGE_ACTIONS = new Set([
+  "open_app",
+  "open_program",
+  "create_folder",
+  "open_folder",
+  "open_url",
+  "shutdown_pc",
+  "cancel_shutdown"
+]);
+
+function getBridgeToken(): string {
+  return process.env.ATLAS_BRIDGE_TOKEN?.trim() || "";
+}
+
 app.get("/api/bridge/status", async (_req, res) => {
-  const bridgeUrls = ["http://127.0.0.1:5000", "http://localhost:5000"];
-  for (const url of bridgeUrls) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 1200);
-      const bridgeRes = await fetch(`${url}/status`, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (bridgeRes.ok) {
-        const data = await bridgeRes.json();
-        return res.json({ connected: true, data });
-      }
-    } catch {}
-  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const bridgeRes = await fetch(`${BRIDGE_URL}/status`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (bridgeRes.ok) {
+      const data = await bridgeRes.json();
+      return res.json({ connected: true, data });
+    }
+  } catch {}
   return res.json({ connected: false, error: "Puente local no detectado en 127.0.0.1:5000" });
 });
 
 app.post("/api/bridge/action", async (req, res) => {
   const { action, payload } = req.body;
-  const bridgeUrls = ["http://127.0.0.1:5000", "http://localhost:5000"];
-  for (const url of bridgeUrls) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-      const bridgeRes = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, payload }),
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-      if (bridgeRes.ok) {
-        const data = await bridgeRes.json();
-        return res.json(data);
-      }
-    } catch {}
+
+  if (!ALLOWED_BRIDGE_ACTIONS.has(action)) {
+    return res.status(400).json({ success: false, error: `Acción "${action}" no está permitida.` });
   }
-  return res.status(500).json({ success: false, error: "No se pudo comunicar con el puente local en el puerto 5000." });
+
+  const token = getBridgeToken();
+  if (!token) {
+    return res.status(500).json({
+      success: false,
+      error: "ATLAS_BRIDGE_TOKEN no está configurado en el servidor. Copia el token que imprime local_bridge.py/js a tu .env y reinicia."
+    });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const bridgeRes = await fetch(BRIDGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Atlas-Token": token },
+      body: JSON.stringify({ action, payload }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const data = await bridgeRes.json();
+    if (bridgeRes.status === 401) {
+      return res.status(401).json({ success: false, error: "Token de puente incorrecto. Revisa que ATLAS_BRIDGE_TOKEN coincida en ambos lados." });
+    }
+    return res.json(data);
+  } catch {
+    return res.status(500).json({ success: false, error: "No se pudo comunicar con el puente local en el puerto 5000." });
+  }
 });
 
 // =========================================================================
