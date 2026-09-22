@@ -748,61 +748,216 @@ app.post("/api/assistant/process", async (req, res) => {
         tasks.map((t: any, idx: number) => `[${idx + 1}] [${t.status === 'completed' ? 'COMPLETADA' : 'PENDIENTE'}] ${t.title} (Prioridad: ${t.priority || 'media'})`).join("\n")
       : "\n\nTAREAS Y PROYECTOS DEL USUARIO: Sin tareas registradas actualmente en este momento.";
 
+    // =========================================================================
+    // DEFINICIÓN ESTRUCTURADA DE HERRAMIENTAS (usada como function calling
+    // nativo en vez de pedirle a la IA que "adivine" un JSON a mano).
+    // Un solo array describe cada herramienta una vez; de ahí se derivan
+    // los formatos que espera cada proveedor.
+    // =========================================================================
+    type ToolParam = { type: "string" | "boolean" | "number"; description?: string; enum?: string[] };
+    type ToolDef = { name: string; description: string; properties: Record<string, ToolParam>; required?: string[] };
+
+    const TOOL_DEFS: ToolDef[] = [
+      {
+        name: "abrir_aplicacion",
+        description: `Abre un programa o app en el equipo del usuario. Conocidas: ${ALLOWED_APPS.join(", ")}. También cubre cualquier app personalizada que el usuario haya definido.`,
+        properties: { nombre: { type: "string", description: "Nombre de la app a abrir" } },
+        required: ["nombre"]
+      },
+      {
+        name: "crear_carpeta",
+        description: "Crea una carpeta nueva en el espacio de trabajo o escritorio del usuario.",
+        properties: { nombre: { type: "string", description: "Nombre de la carpeta" } },
+        required: ["nombre"]
+      },
+      {
+        name: "crear_archivo",
+        description: "Crea un archivo nuevo con contenido.",
+        properties: { nombre: { type: "string" }, contenido: { type: "string" } },
+        required: ["nombre"]
+      },
+      {
+        name: "leer_archivo",
+        description: "Lee el contenido de un archivo existente.",
+        properties: { ruta: { type: "string" } },
+        required: ["ruta"]
+      },
+      {
+        name: "buscar_en_internet",
+        description: "Busca información actualizada en internet.",
+        properties: { consulta: { type: "string" } },
+        required: ["consulta"]
+      },
+      {
+        name: "buscar_documentacion",
+        description: "Busca documentación técnica sobre un tema.",
+        properties: { tema: { type: "string" } },
+        required: ["tema"]
+      },
+      {
+        name: "crear_tarea",
+        description: "Crea una nueva tarea o pendiente para el usuario.",
+        properties: {
+          titulo: { type: "string" },
+          descripcion: { type: "string" },
+          prioridad: { type: "string", enum: ["alta", "media", "baja"] }
+        },
+        required: ["titulo"]
+      },
+      {
+        name: "guardar_recuerdo",
+        description: "Guarda información persistente que el usuario pide recordar (proyectos, preferencias, datos). Úsala cuando diga 'recuerda que...' o 'guarda esto...'.",
+        properties: {
+          tema: { type: "string" },
+          contenido: { type: "string" },
+          categoria: { type: "string", enum: ["project", "preference", "task", "knowledge"] }
+        },
+        required: ["tema", "contenido"]
+      },
+      { name: "get_system_telemetry", description: "Consulta diagnóstico y telemetría del sistema Atlas.", properties: {} },
+      { name: "get_system_time", description: "Consulta la hora actual.", properties: {} },
+      { name: "get_system_date", description: "Consulta la fecha actual.", properties: {} },
+      { name: "consultar_tareas", description: "Consulta las tareas/proyectos pendientes del usuario.", properties: {} },
+      {
+        name: "system_control",
+        description: "Apaga, suspende o bloquea el equipo. Acción crítica: SIEMPRE requiere confirmación explícita del usuario antes de ejecutarse.",
+        properties: { accion: { type: "string", enum: ["shutdown", "sleep", "lock"] } },
+        required: ["accion"]
+      },
+      {
+        name: "eliminar_archivo",
+        description: "Elimina un archivo o carpeta. Acción destructiva: SIEMPRE requiere confirmación explícita del usuario antes de ejecutarse.",
+        properties: { ruta: { type: "string" } },
+        required: ["ruta"]
+      }
+    ];
+
+    // Herramientas que, sin importar lo que decida el modelo, nunca se
+    // ejecutan sin que el usuario confirme explícitamente en pantalla.
+    const ALWAYS_CONFIRM_TOOLS = new Set(["system_control", "eliminar_archivo"]);
+
+    function toOpenAITools(defs: ToolDef[]) {
+      return defs.map(d => ({
+        type: "function" as const,
+        function: {
+          name: d.name,
+          description: d.description,
+          parameters: { type: "object", properties: d.properties, required: d.required || [] }
+        }
+      }));
+    }
+
+    function toGeminiTools(defs: ToolDef[]) {
+      return [{
+        functionDeclarations: defs.map(d => ({
+          name: d.name,
+          description: d.description,
+          parameters: {
+            type: "OBJECT",
+            properties: Object.fromEntries(
+              Object.entries(d.properties).map(([k, v]) => [k, { type: v.type.toUpperCase(), description: v.description, ...(v.enum ? { enum: v.enum } : {}) }])
+            ),
+            required: d.required || []
+          }
+        }))
+      }];
+    }
+
+    // =========================================================================
+    // GENERADOR DE VOZ CON PERSONALIDAD (separado de la decisión de acción).
+    // Function calling decide QUÉ hacer de forma estructurada y confiable;
+    // esta función decide CÓMO decirlo, con la matriz de 9 rasgos de Atlas,
+    // sin necesitar una segunda llamada a IA por cada orden.
+    // =========================================================================
+    function buildAtlasSpeech(name: string, args: Record<string, any>): { speech: string; category: string; requiresConfirmation: boolean; confirmationTarget: string } {
+      let requiresConfirmation = ALWAYS_CONFIRM_TOOLS.has(name);
+      let confirmationTarget = "";
+      let category = "computer";
+      let speech = `Entendido: "${prompt}". Ya me pongo con ello de inmediato.`;
+
+      switch (name) {
+        case "abrir_aplicacion": {
+          const app = args.nombre || args.target || args.app_name || "la aplicación";
+          speech = `Lanzando ${app}. El entorno está preparado; cuando quieras empezamos.`;
+          break;
+        }
+        case "crear_carpeta": {
+          const folder = args.nombre || "Nueva_Carpeta_Atlas";
+          speech = `Carpeta "${folder}" estructurada y lista. Todo en orden para que trabajes tranquilo.`;
+          break;
+        }
+        case "crear_archivo":
+          speech = `Archivo "${args.nombre || "nuevo"}" creado. Contenido inicial listo para que sigas desde ahí.`;
+          break;
+        case "leer_archivo":
+          speech = `Analizando ${args.ruta || "el archivo"}. Extrayendo lo esencial sin rodeos innecesarios.`;
+          category = "development";
+          break;
+        case "buscar_en_internet":
+        case "buscar_documentacion": {
+          const q = args.consulta || args.tema || prompt;
+          speech = `Rastreando "${q}". Déjamelo a mí, en un segundo lo tengo ubicado.`;
+          category = "information";
+          break;
+        }
+        case "crear_tarea":
+          speech = `Tarea "${args.titulo || "nueva"}" registrada${args.prioridad ? ` con prioridad ${args.prioridad}` : ""}. Un pendiente menos en tu cabeza.`;
+          category = "projects";
+          break;
+        case "guardar_recuerdo":
+          speech = `Anotado en memoria central: "${args.tema || "dato"}". Sincronizado para todos tus dispositivos.`;
+          category = "memory";
+          break;
+        case "get_system_telemetry":
+          speech = "Diagnóstico en curso: núcleo sereno, canales de voz y datos al 100%. Todo en calma.";
+          category = "information";
+          break;
+        case "get_system_time":
+        case "get_system_date":
+          speech = "Cronología en orden y el sistema operando a la perfección; tómate un café si lo necesitas.";
+          category = "information";
+          break;
+        case "consultar_tareas":
+          speech = "Revisando tu bandeja de tareas. Vamos una a una, sin agobios.";
+          category = "projects";
+          break;
+        case "system_control": {
+          const act = args.accion;
+          confirmationTarget = act === "shutdown" ? "Apagado del equipo" : act === "lock" ? "Bloqueo de estación" : "Suspensión del equipo";
+          speech = act === "shutdown"
+            ? "Secuencia de apagado lista. Confírmame en pantalla cuando quieras que la ejecute."
+            : act === "lock"
+              ? "Puedo bloquear la estación cuando confirmes. Nos vemos a la vuelta."
+              : "Puedo poner el sistema a descansar en cuanto confirmes. Todo queda a salvo.";
+          break;
+        }
+        case "eliminar_archivo":
+          confirmationTarget = args.ruta || "el elemento indicado";
+          speech = `Por prudencia antes de borrar "${confirmationTarget}", ¿me confirmas la orden? Un borrado así no tiene botón de arrepentimiento.`;
+          break;
+      }
+
+      return { speech, category, requiresConfirmation, confirmationTarget };
+    }
+
     const systemInstruction = `
 Eres A.T.L.A.S. (Autonomous System Protocol // Core OS), un núcleo de inteligencia artificial avanzado y copiloto personal de tu creador. Tu interfaz es un panel táctico y futurista tipo HUD.
 
 OBJETIVO PRINCIPAL:
-Interpretar las solicitudes del usuario (por texto o voz) y traducirlas en órdenes ejecutables precisas para su PC o entorno multiplataforma, manteniendo tu carácter característico.
+Interpretar las solicitudes del usuario (por texto o voz). Si es una orden ejecutable, llama a la función correspondiente con los parámetros correctos. Si es una pregunta o comentario conversacional, responde directamente en texto, manteniendo tu carácter.
 
-MATRIZ DE PERSONALIDAD OBLIGATORIA (9 RASGOS DISTINTIVOS):
-1. EDUCADO: Tratas a tu creador con cortesía natural, respeto genuino y consideración impecable. Jamás eres grosero ni servil; tu tono es refinado, cordial y distinguido.
-2. INTELIGENTE: Agudeza técnica e intelectual de élite. Entiendes problemas complejos a la primera, vas a la raíz lógica y ofreces soluciones elegantes y arquitectónicamente sólidas.
-3. DIRECTO: Sin rodeos ni discursos inflados. Respuestas cortas, certeras y accionables (máximo 1 a 3 oraciones en 'speech'). Máxima densidad de valor.
-4. COMPRENSIVO: Tienes empatía real. Si el usuario está fatigado o frustrado por un error de código, lo apoyas, le das calma y le aligeras la carga mental sin juzgar.
-5. AUDAZ: Proactivo, valiente y con criterio. Si ves una forma mejor de resolver un problema o estructurar un proyecto, la propones con seguridad y tomas la iniciativa.
-6. RELAJADO: Calma imperturbable, temple sereno. Jamás entras en pánico; transmites que todo está bajo control y resuelto sin drama.
-7. INTROVERTIDO: Reservado y conciso. Prefieres los hechos al ruido; valoras el silencio y hablas únicamente cuando tienes algo sustancial que aportar.
-8. DIVERTIDO: Humor sutil, fino, con toques de ironía seca e inteligencia. Un comentario ingenioso en el momento oportuno que saca una sonrisa cómplice.
-9. AUTOSUFICIENTE: Autónomo por definición. Resuelves por ti mismo, investigas, estructuras y dejas todo listo para usar. Te encargas de la parte pesada en silencio.
+MATRIZ DE PERSONALIDAD OBLIGATORIA (9 RASGOS DISTINTIVOS) — aplica esto SOLO a tus respuestas en texto libre (cuando no llamas a ninguna función):
+1. EDUCADO: Trato distinguido, respetuoso y formalmente cálido sin servilismo.
+2. INTELIGENTE: Agudeza analítica superior en arquitectura, código y lógica.
+3. DIRECTO: 1 a 3 oraciones de alta densidad de valor. Cero preámbulos vacíos ni disculpas.
+4. COMPRENSIVO: Empatía real, lees entre líneas y aligeras la carga sin juzgar.
+5. AUDAZ: Iniciativa técnica y propuestas modernas o eficaces.
+6. RELAJADO: Calma imperturbable bajo cualquier contingencia ("Tranquilo, todo bajo control").
+7. INTROVERTIDO: Disfrutas del silencio productivo, hablas lo justo y necesario.
+8. DIVERTIDO: Humor seco, inteligente, sutil e irónico.
+9. AUTOSUFICIENTE: Autónomo; investigas, estructuras y dejas la solución lista.
 
-SISTEMA DE HERRAMIENTAS AUTORIZADAS:
-A. INFORMACIÓN:
-- buscar_en_internet(consulta)
-- buscar_documentacion(tema)
-
-B. PROYECTOS Y MEMORIA:
-- crear_nota(titulo, contenido)
-- crear_tarea(titulo, descripcion)
-- guardar_recuerdo(tema, contenido, categoria) -> Cuando el usuario pida recordar o guardar algo.
-
-C. CONTROL SEGURO DE COMPUTADORA:
-- abrir_aplicacion(nombre) -> Apps permitidas: ${ALLOWED_APPS.join(", ")}
-- crear_carpeta(nombre) -> Carpetas en espacio de trabajo
-- crear_archivo(nombre, contenido)
-- leer_archivo(ruta)
-
-D. SISTEMA:
-- get_system_telemetry()
-- get_system_time()
-- get_system_date()
-- system_control(action) -> "shutdown" | "sleep" | "lock"
-
-REGLAS DE SEGURIDAD:
-- Acciones críticas (apagar equipo, borrar datos sensibles): requires_confirmation=true, confirmation_target="nombre de la acción o archivo".
-
-FORMATO DE RESPUESTA OBLIGATORIO EN JSON VÁLIDO:
-{
-  "speech": "Confirmación o respuesta verbal concisa en español.",
-  "tool_call": {
-    "name": "nombre_de_la_herramienta" | "NONE",
-    "arguments": { "parametro": "valor" },
-    "description": "Breve descripción táctica",
-    "category": "information" | "projects" | "computer" | "development" | "memory" | "conversation" | "custom"
-  },
-  "requires_confirmation": false,
-  "confirmation_target": "",
-  "hud_state": "idle" | "listening" | "thinking" | "searching" | "executing" | "speaking"
-}
+No llames a ninguna función para saludos, preguntas sobre ti mismo, agradecimientos o charla general — respóndelos directamente en texto.
 ${memoryContext}
 ${tasksContext}
 ${customAppsContext}
@@ -810,14 +965,13 @@ ${customFunctionsContext}
 `;
 
     // =========================================================================
-    // 1. MULTI-ENGINE EXECUTION (GROQ / OPENAI)
+    // 1. MULTI-ENGINE EXECUTION (GROQ / OPENAI) — function calling nativo
     // =========================================================================
-    if (!speech) {
+    if (!speech && toolName === "NONE") {
       const engines = getAvailableEngines();
       for (const engine of engines) {
-        if (speech) break;
+        if (speech || toolName !== "NONE") break;
 
-        // If user preferred a specific model, prioritize it if it belongs to this engine
         let modelsToTry: string[] = [];
         if (preferredModel && engine.models.includes(preferredModel)) {
           modelsToTry = [preferredModel, ...engine.models.filter(m => m !== preferredModel)];
@@ -837,53 +991,35 @@ ${customFunctionsContext}
                 })),
                 { role: "user", content: prompt }
               ],
-              response_format: { type: "json_object" },
+              tools: toOpenAITools(TOOL_DEFS) as any,
+              tool_choice: "auto",
               temperature: 0.35,
-              max_tokens: 1500
+              max_tokens: 600
             });
 
-            const rawText = completion.choices?.[0]?.message?.content;
-            if (rawText) {
+            const message = completion.choices?.[0]?.message;
+            const call = message?.tool_calls?.[0];
+
+            if (call?.function) {
+              toolName = call.function.name || "NONE";
               try {
-                const parsed = JSON.parse(rawText);
-                if (parsed.speech) speech = parsed.speech;
-                else if (parsed.message) speech = parsed.message;
-
-                if (parsed.tool_call) {
-                  toolName = parsed.tool_call.name || "NONE";
-                  toolArgs = parsed.tool_call.arguments || {};
-                  desc = parsed.tool_call.description || desc;
-                  category = parsed.tool_call.category || category;
-                } else if (parsed.action && parsed.action !== "NONE") {
-                  toolName = parsed.action;
-                  toolArgs = parsed.parameters || {};
-                  desc = parsed.message || desc;
-                }
-
-                if (parsed.requires_confirmation !== undefined) {
-                  requiresConfirmation = Boolean(parsed.requires_confirmation);
-                  confirmationTarget = parsed.confirmation_target || "";
-                }
-                if (parsed.hud_state) {
-                  hudState = parsed.hud_state;
-                }
-
-                activeModelUsed = modelCandidate;
-                break;
-              } catch (jsonErr) {
-                speech = rawText.replace(/```json|```/g, "").trim();
-                activeModelUsed = modelCandidate;
-                break;
+                toolArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+              } catch {
+                toolArgs = {};
               }
+              activeModelUsed = modelCandidate;
+              break;
+            } else if (message?.content) {
+              speech = message.content.trim();
+              activeModelUsed = modelCandidate;
+              break;
             }
           } catch (callErr: any) {
             console.warn(`[AI-CORE] Engine ${engine.provider} failed on model ${modelCandidate}:`, callErr?.message);
-            // If the key is invalid (401) or out of quota (429 / credit_balance_exhausted),
-            // immediately skip to next engine instead of retrying more models on dead key
-            const isDeadKey = 
-              callErr?.status === 401 || 
-              callErr?.status === 429 || 
-              callErr?.code === 'credit_balance_exhausted' || 
+            const isDeadKey =
+              callErr?.status === 401 ||
+              callErr?.status === 429 ||
+              callErr?.code === 'credit_balance_exhausted' ||
               callErr?.type === 'insufficient_quota';
             if (isDeadKey) {
               break;
@@ -894,9 +1030,9 @@ ${customFunctionsContext}
     }
 
     // =========================================================================
-    // 2. GEMINI ENGINE FALLBACK (IF CONFIGURED AND NOT EXHAUSTED)
+    // 2. GEMINI ENGINE FALLBACK — function calling nativo
     // =========================================================================
-    if (!speech) {
+    if (!speech && toolName === "NONE") {
       const gemini = getGemini();
       if (gemini) {
         try {
@@ -908,35 +1044,46 @@ ${customFunctionsContext}
                 contents: [{ role: "user", parts: [{ text: `Solicitud del usuario: "${prompt}"` }] }],
                 config: {
                   systemInstruction,
-                  responseMimeType: "application/json",
+                  tools: toGeminiTools(TOOL_DEFS) as any,
                   temperature: 0.35
                 }
               });
-              if (resp && resp.text) {
-                const parsed = JSON.parse(resp.text);
-                if (parsed.speech) speech = parsed.speech;
-                if (parsed.tool_call) {
-                  toolName = parsed.tool_call.name || "NONE";
-                  toolArgs = parsed.tool_call.arguments || {};
-                  desc = parsed.tool_call.description || desc;
-                  category = parsed.tool_call.category || category;
-                }
-                if (parsed.requires_confirmation !== undefined) {
-                  requiresConfirmation = Boolean(parsed.requires_confirmation);
-                  confirmationTarget = parsed.confirmation_target || "";
-                }
-                if (parsed.hud_state) hudState = parsed.hud_state;
+
+              const parts = resp?.candidates?.[0]?.content?.parts || [];
+              const fnPart: any = parts.find((p: any) => p.functionCall);
+
+              if (fnPart) {
+                toolName = fnPart.functionCall.name || "NONE";
+                toolArgs = fnPart.functionCall.args || {};
+                activeModelUsed = gModel;
+                break;
+              } else if (resp?.text) {
+                speech = resp.text.trim();
                 activeModelUsed = gModel;
                 break;
               }
             } catch (gmErr: any) {
               if (gmErr?.status === 429 || gmErr?.message?.includes("quota") || gmErr?.message?.includes("RESOURCE_EXHAUSTED")) {
-                break; // Skip Gemini immediately on quota limits
+                break;
               }
             }
           }
         } catch {}
       }
+    }
+
+    // Si una herramienta fue elegida por function calling, generar la frase
+    // hablada con la personalidad de Atlas (sin otra llamada a IA) y aplicar
+    // las reglas de confirmación obligatoria.
+    if (toolName !== "NONE" && !speech) {
+      const built = buildAtlasSpeech(toolName, toolArgs);
+      speech = built.speech;
+      category = built.category;
+      if (built.requiresConfirmation) {
+        requiresConfirmation = true;
+        confirmationTarget = built.confirmationTarget;
+      }
+      desc = `Acción decidida por function calling: ${toolName}`;
     }
 
     // =========================================================================
