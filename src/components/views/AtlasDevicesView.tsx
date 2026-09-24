@@ -29,6 +29,7 @@ export const AtlasDevicesView: React.FC<AtlasDevicesViewProps> = ({ onDispatchAc
   const [devices, setDevices] = useState<DeviceData[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('device_pc_master');
   const [loading, setLoading] = useState<boolean>(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [customActionText, setCustomActionText] = useState<string>('');
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
@@ -54,50 +55,17 @@ export const AtlasDevicesView: React.FC<AtlasDevicesViewProps> = ({ onDispatchAc
     try {
       const res = await fetch('/api/core/devices');
       const data = await res.json();
-      if (data.success && data.devices) {
+      if (data.success && Array.isArray(data.devices)) {
         setDevices(data.devices);
+        setFetchError(null);
       }
     } catch (err) {
-      console.warn('[DevicesView] Usando datos locales de contingencia:', err);
-      // Fallback
-      setDevices([
-        {
-          id: 'device_pc_master',
-          name: 'PC PRINCIPAL',
-          type: 'pc',
-          status: 'online',
-          isCurrentDevice: true,
-          lastSeen: new Date().toISOString(),
-          ip: '192.168.1.105',
-          os: 'Windows 11 Pro 64-bit // Electron Native',
-          capabilities: ['aplicaciones', 'archivos', 'pantalla', 'microfono', 'herramientas_desarrollo', 'terminal'],
-          permissions: ['filesystem.read', 'filesystem.write', 'applications.open', 'terminal.execute']
-        },
-        {
-          id: 'device_phone_mobile',
-          name: 'TELÉFONO',
-          type: 'phone',
-          status: 'online',
-          isCurrentDevice: false,
-          lastSeen: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
-          ip: '192.168.1.142',
-          os: 'Android 15 // ATLAS Mobile PWA / Client',
-          capabilities: ['microfono', 'camara', 'notificaciones', 'geolocalizacion'],
-          permissions: ['voice.speak', 'notifications.push']
-        },
-        {
-          id: 'device_laptop_work',
-          name: 'LAPTOP',
-          type: 'laptop',
-          status: 'offline',
-          isCurrentDevice: false,
-          lastSeen: new Date(Date.now() - 1000 * 60 * 60 * 14).toISOString(),
-          ip: '192.168.1.189',
-          os: 'macOS Sonoma // Portable Workstation',
-          capabilities: ['aplicaciones', 'archivos', 'pantalla', 'microfono'],
-          permissions: ['filesystem.read', 'applications.open']
-        }
-      ]);
+      // Antes esto rellenaba con 3 dispositivos inventados (IPs falsas,
+      // "última vez visto" fija). Ahora, si no se puede hablar con el
+      // servidor, se muestra honestamente una lista vacía + aviso — no un
+      // estado falso de "todo conectado".
+      console.warn('[DevicesView] No se pudo consultar /api/core/devices:', err);
+      setFetchError('No se pudo conectar con el núcleo Atlas para listar dispositivos.');
     } finally {
       setLoading(false);
     }
@@ -247,6 +215,16 @@ export const AtlasDevicesView: React.FC<AtlasDevicesViewProps> = ({ onDispatchAc
           </div>
 
           <div className="space-y-2.5">
+            {fetchError && devices.length === 0 && (
+              <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/5 text-amber-300 text-xs">
+                ⚠️ {fetchError} Verifica que el servidor de Atlas esté corriendo.
+              </div>
+            )}
+            {!fetchError && !loading && devices.length === 0 && (
+              <div className="p-4 rounded-2xl border border-[#00f2ff22] bg-[#050c20]/80 text-slate-400 text-xs">
+                Todavía no hay ningún dispositivo conectado. Abre Atlas desde otro navegador o dispositivo, o arranca el puente local, para que aparezca aquí en tiempo real.
+              </div>
+            )}
             {devices.map((device) => {
               const IconComp = getDeviceIcon(device.type);
               const isSelected = selectedDeviceId === device.id;
