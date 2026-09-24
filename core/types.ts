@@ -118,7 +118,9 @@ export interface RealSystemStatus {
     status: 'connected' | 'degraded' | 'offline';
     name: string;
     provider: 'gemini' | 'ollama' | 'openai' | 'heuristic';
-    latencyMs: number;
+    // Opcional: solo se reporta si de verdad se midió una llamada real al
+    // modelo. Antes era obligatorio y se rellenaba con Math.random().
+    latencyMs?: number;
   };
   internet: {
     status: 'connected' | 'disconnected';
