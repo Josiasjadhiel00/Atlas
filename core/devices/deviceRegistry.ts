@@ -3,111 +3,13 @@ import { RegisteredDevice, DeviceType, DeviceStatus } from '../types';
 class AtlasDeviceRegistry {
   private devices: Map<string, RegisteredDevice> = new Map();
 
-  constructor() {
-    this.seedDefaultFleet();
-  }
-
-  private seedDefaultFleet() {
-    // Dispositivos base de la flota de ATLAS
-    const baseFleet: RegisteredDevice[] = [
-      {
-        id: 'device_pc_master',
-        name: 'PC PRINCIPAL',
-        type: 'pc',
-        status: 'online',
-        isCurrentDevice: true,
-        lastSeen: new Date().toISOString(),
-        ip: '192.168.1.105',
-        os: 'Windows 11 Pro 64-bit // Electron Native',
-        capabilities: [
-          'aplicaciones',
-          'archivos',
-          'pantalla',
-          'microfono',
-          'herramientas_desarrollo',
-          'terminal',
-          'automatizacion_local'
-        ],
-        permissions: [
-          'filesystem.read',
-          'filesystem.write',
-          'applications.open',
-          'applications.close',
-          'terminal.execute',
-          'system.volume',
-          'vision.screen'
-        ]
-      },
-      {
-        id: 'device_phone_mobile',
-        name: 'TELÉFONO',
-        type: 'phone',
-        status: 'online',
-        isCurrentDevice: false,
-        lastSeen: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
-        ip: '192.168.1.142',
-        os: 'Android 15 // ATLAS Mobile PWA / Client',
-        capabilities: [
-          'microfono',
-          'camara',
-          'notificaciones',
-          'geolocalizacion',
-          'audio_remoto'
-        ],
-        permissions: [
-          'voice.speak',
-          'notifications.push',
-          'camera.capture'
-        ]
-      },
-      {
-        id: 'device_laptop_work',
-        name: 'LAPTOP',
-        type: 'laptop',
-        status: 'offline',
-        isCurrentDevice: false,
-        lastSeen: new Date(Date.now() - 1000 * 60 * 60 * 14).toISOString(),
-        ip: '192.168.1.189',
-        os: 'macOS Sonoma // Portable Workstation',
-        capabilities: [
-          'aplicaciones',
-          'archivos',
-          'pantalla',
-          'microfono',
-          'herramientas_desarrollo'
-        ],
-        permissions: [
-          'filesystem.read',
-          'applications.open'
-        ]
-      },
-      {
-        id: 'device_web_remote',
-        name: 'PORTAL WEB REMOTO',
-        type: 'web',
-        status: 'online',
-        isCurrentDevice: false,
-        lastSeen: new Date().toISOString(),
-        ip: 'Cloud Run Ingress',
-        os: 'Chrome / Web HUD Standard',
-        capabilities: [
-          'chat_seguro',
-          'telemetria_remota',
-          'administracion_memoria',
-          'supervision_flota'
-        ],
-        permissions: [
-          'memory.read',
-          'memory.write',
-          'devices.view'
-        ]
-      }
-    ];
-
-    for (const dev of baseFleet) {
-      this.devices.set(dev.id, dev);
-    }
-  }
+  // NOTA: antes esto arrancaba con 4 dispositivos inventados (IPs falsas,
+  // "Cloud Run Ingress" como IP, un timestamp de "última vez visto" fijo
+  // para siempre). Se quitó por completo: el registro ahora solo contiene
+  // dispositivos que de verdad se conectaron por WebSocket (ver
+  // api/websocketServer.ts, evento 'register_device') o que el puente
+  // local confirmó que está corriendo (ver server.ts /api/bridge/status).
+  // Un registro vacío significa, honestamente, "nada conectado todavía".
 
   public getAllDevices(): RegisteredDevice[] {
     return Array.from(this.devices.values());
@@ -119,22 +21,29 @@ class AtlasDeviceRegistry {
 
   public findDeviceByNameOrAlias(query: string): RegisteredDevice | undefined {
     const clean = query.toLowerCase().trim();
-    if (clean.includes('pc') || clean.includes('computadora') || clean.includes('ordenador') || clean.includes('escritorio')) {
-      return this.devices.get('device_pc_master');
-    }
-    if (clean.includes('celular') || clean.includes('teléfono') || clean.includes('telefono') || clean.includes('movil') || clean.includes('móvil')) {
-      return this.devices.get('device_phone_mobile');
-    }
-    if (clean.includes('laptop') || clean.includes('portátil') || clean.includes('portatil') || clean.includes('macbook')) {
-      return this.devices.get('device_laptop_work');
-    }
-    
-    // Búsqueda directa
+
+    // Búsqueda directa por nombre/id entre lo que esté realmente registrado
     for (const dev of this.devices.values()) {
       if (dev.name.toLowerCase().includes(clean) || dev.id.toLowerCase().includes(clean)) {
         return dev;
       }
     }
+
+    // Si no hay match directo, intenta por tipo de dispositivo (el primero
+    // online de ese tipo, si existe)
+    let wantedType: DeviceType | null = null;
+    if (clean.includes('pc') || clean.includes('computadora') || clean.includes('ordenador') || clean.includes('escritorio')) {
+      wantedType = 'pc';
+    } else if (clean.includes('celular') || clean.includes('teléfono') || clean.includes('telefono') || clean.includes('movil') || clean.includes('móvil')) {
+      wantedType = 'phone';
+    } else if (clean.includes('laptop') || clean.includes('portátil') || clean.includes('portatil') || clean.includes('macbook')) {
+      wantedType = 'laptop';
+    }
+    if (wantedType) {
+      const byType = Array.from(this.devices.values()).filter(d => d.type === wantedType);
+      return byType.find(d => d.status === 'online') || byType[0];
+    }
+
     return undefined;
   }
 
