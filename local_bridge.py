@@ -36,6 +36,25 @@ BRIDGE_TOKEN = os.environ.get("ATLAS_BRIDGE_TOKEN") or secrets.token_hex(24)
 # de la víctima). Ajusta ATLAS_APP_ORIGIN si tu app corre en otro puerto/host.
 ALLOWED_ORIGIN = os.environ.get("ATLAS_APP_ORIGIN", "http://localhost:3000")
 
+# SEGURIDAD: eliminar_archivo NUNCA borra fuera de esta carpeta, sin importar
+# lo que pida el modelo de IA. Por defecto tu Escritorio; puedes apuntarlo a
+# una carpeta de trabajo dedicada con ATLAS_SAFE_DELETE_ROOT.
+SAFE_DELETE_ROOT = os.path.realpath(
+    os.environ.get("ATLAS_SAFE_DELETE_ROOT", os.path.join(os.path.expanduser("~"), "Desktop"))
+)
+
+def resolve_safe_delete_target(raw_path):
+    """Devuelve la ruta real si cae dentro de SAFE_DELETE_ROOT, o None si no."""
+    if not raw_path:
+        return None
+    candidate = raw_path.replace("~", os.path.expanduser("~"))
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(SAFE_DELETE_ROOT, candidate)
+    real = os.path.realpath(candidate)
+    if real == SAFE_DELETE_ROOT or not real.startswith(SAFE_DELETE_ROOT + os.sep):
+        return None
+    return real
+
 class JarvisBridgeHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
         origin = self.headers.get('Origin', '')
@@ -167,16 +186,62 @@ class JarvisBridgeHandler(BaseHTTPRequestHandler):
             # necesitas, hazlo con una lista blanca de comandos permitidos
             # en vez de aceptar cualquier string.
 
-            # 6. Apagar / Reiniciar PC
-            elif action == "shutdown_pc":
-                if platform.system() == "Windows":
-                    os.system("shutdown /s /t 60")
-                res = {"success": True, "message": "Secuencia de apagado iniciada (60s)"}
+            # 6. Apagar / suspender / bloquear / cancelar apagado del equipo.
+            # Esta acción solo llega aquí después de que el usuario confirmó
+            # explícitamente en pantalla (ver server.ts /api/assistant/confirm).
+            elif action == "system_power":
+                sub_action = payload.get("action", "")
+                system = platform.system()
+                if sub_action == "shutdown":
+                    if system == "Windows":
+                        os.system("shutdown /s /t 60")
+                    elif system == "Darwin":
+                        os.system("osascript -e 'tell app \"System Events\" to shut down'")
+                    else:
+                        os.system("shutdown -h +1")
+                    res = {"success": True, "message": "Secuencia de apagado iniciada (60s). Puedes cancelarla."}
+                elif sub_action == "sleep":
+                    if system == "Windows":
+                        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+                    elif system == "Darwin":
+                        os.system("pmset sleepnow")
+                    else:
+                        os.system("systemctl suspend")
+                    res = {"success": True, "message": "Sistema suspendido"}
+                elif sub_action == "lock":
+                    if system == "Windows":
+                        os.system("rundll32.exe user32.dll,LockWorkStation")
+                    elif system == "Darwin":
+                        os.system("pmset displaysleepnow")
+                    else:
+                        os.system("loginctl lock-session")
+                    res = {"success": True, "message": "Estación bloqueada"}
+                elif sub_action == "cancel_shutdown":
+                    if system == "Windows":
+                        os.system("shutdown /a")
+                    res = {"success": True, "message": "Apagado cancelado"}
+                else:
+                    res = {"success": False, "error": f"Sub-acción de energía desconocida: {sub_action}"}
 
-            elif action == "cancel_shutdown":
-                if platform.system() == "Windows":
-                    os.system("shutdown /a")
-                res = {"success": True, "message": "Apagado cancelado"}
+            # 7. Eliminar archivo/carpeta — NUNCA borra de verdad: lo mueve a
+            # una subcarpeta "Atlas_Trash" dentro de la zona segura, y solo
+            # si la ruta cae dentro de SAFE_DELETE_ROOT. Así una orden mal
+            # interpretada (por la IA o por ti) sigue siendo reversible.
+            elif action == "delete_path":
+                raw_path = payload.get("path", "")
+                real_target = resolve_safe_delete_target(raw_path)
+                if not real_target:
+                    res = {"success": False, "error": f"Ruta fuera de la zona segura ({SAFE_DELETE_ROOT}). No se borró nada."}
+                elif not os.path.exists(real_target):
+                    res = {"success": False, "error": f"No existe: {real_target}"}
+                else:
+                    trash_dir = os.path.join(SAFE_DELETE_ROOT, "Atlas_Trash")
+                    os.makedirs(trash_dir, exist_ok=True)
+                    import time
+                    stamp = time.strftime("%Y%m%d_%H%M%S")
+                    dest = os.path.join(trash_dir, f"{stamp}_{os.path.basename(real_target)}")
+                    os.rename(real_target, dest)
+                    res = {"success": True, "message": f"Movido a la papelera de Atlas: {dest}", "trashed_to": dest}
 
             else:
                 res = {"success": False, "error": f"Acción desconocida: {action}"}

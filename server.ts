@@ -399,12 +399,50 @@ const ALLOWED_BRIDGE_ACTIONS = new Set([
   "create_folder",
   "open_folder",
   "open_url",
-  "shutdown_pc",
-  "cancel_shutdown"
+  "system_power",
+  "delete_path"
 ]);
 
 function getBridgeToken(): string {
   return process.env.ATLAS_BRIDGE_TOKEN?.trim() || "";
+}
+
+// Helper compartido: reenvía una acción al puente local ya autenticada.
+// Lo usan tanto /api/bridge/action (llamado por el frontend para acciones
+// normales) como /api/assistant/confirm (llamado tras una confirmación
+// explícita del usuario para acciones destructivas).
+async function callLocalBridge(action: string, payload: any): Promise<{ ok: boolean; status: number; data: any }> {
+  if (!ALLOWED_BRIDGE_ACTIONS.has(action)) {
+    return { ok: false, status: 400, data: { success: false, error: `Acción "${action}" no está permitida.` } };
+  }
+
+  const token = getBridgeToken();
+  if (!token) {
+    return {
+      ok: false,
+      status: 500,
+      data: { success: false, error: "ATLAS_BRIDGE_TOKEN no está configurado en el servidor. Copia el token que imprime local_bridge.py/js a tu .env y reinicia." }
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const bridgeRes = await fetch(BRIDGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Atlas-Token": token },
+      body: JSON.stringify({ action, payload }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const data = await bridgeRes.json();
+    if (bridgeRes.status === 401) {
+      return { ok: false, status: 401, data: { success: false, error: "Token de puente incorrecto. Revisa que ATLAS_BRIDGE_TOKEN coincida en ambos lados." } };
+    }
+    return { ok: bridgeRes.ok, status: bridgeRes.status, data };
+  } catch {
+    return { ok: false, status: 500, data: { success: false, error: "No se pudo comunicar con el puente local en el puerto 5000. ¿Está corriendo local_bridge.py/js?" } };
+  }
 }
 
 app.get("/api/bridge/status", async (_req, res) => {
@@ -423,37 +461,8 @@ app.get("/api/bridge/status", async (_req, res) => {
 
 app.post("/api/bridge/action", async (req, res) => {
   const { action, payload } = req.body;
-
-  if (!ALLOWED_BRIDGE_ACTIONS.has(action)) {
-    return res.status(400).json({ success: false, error: `Acción "${action}" no está permitida.` });
-  }
-
-  const token = getBridgeToken();
-  if (!token) {
-    return res.status(500).json({
-      success: false,
-      error: "ATLAS_BRIDGE_TOKEN no está configurado en el servidor. Copia el token que imprime local_bridge.py/js a tu .env y reinicia."
-    });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const bridgeRes = await fetch(BRIDGE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Atlas-Token": token },
-      body: JSON.stringify({ action, payload }),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    const data = await bridgeRes.json();
-    if (bridgeRes.status === 401) {
-      return res.status(401).json({ success: false, error: "Token de puente incorrecto. Revisa que ATLAS_BRIDGE_TOKEN coincida en ambos lados." });
-    }
-    return res.json(data);
-  } catch {
-    return res.status(500).json({ success: false, error: "No se pudo comunicar con el puente local en el puerto 5000." });
-  }
+  const result = await callLocalBridge(action, payload);
+  return res.status(result.status === 200 ? 200 : result.status).json(result.data);
 });
 
 // =========================================================================
@@ -1362,22 +1371,54 @@ ${customFunctionsContext}
   }
 });
 
-// Confirmation endpoint for critical actions
-app.post("/api/assistant/confirm", (req, res) => {
-  const { target, approved } = req.body;
-  if (approved) {
+// Confirmation endpoint for critical actions. A diferencia de antes, esto ya
+// SÍ ejecuta algo real: mapea la herramienta pendiente a una acción del
+// puente local y espera su resultado, en vez de devolver un mensaje
+// enlatado de "completado".
+app.post("/api/assistant/confirm", async (req, res) => {
+  const { target, toolName, toolArgs, approved } = req.body;
+
+  if (!approved) {
     return res.json({
       success: true,
-      message: `Acción sobre '${target}' autorizada y completada en el sistema.`,
-      executed: true
-    });
-  } else {
-    return res.json({
-      success: true,
-      message: `Acción sobre '${target}' cancelada por el usuario por seguridad.`,
-      executed: false
+      executed: false,
+      message: `Acción sobre '${target}' cancelada por el usuario por seguridad.`
     });
   }
+
+  let bridgeAction: string | null = null;
+  let bridgePayload: any = {};
+
+  if (toolName === "system_control") {
+    const accion = toolArgs?.accion;
+    if (accion === "shutdown" || accion === "sleep" || accion === "lock") {
+      bridgeAction = "system_power";
+      bridgePayload = { action: accion };
+    } else if (accion === "cancel_shutdown") {
+      bridgeAction = "system_power";
+      bridgePayload = { action: "cancel_shutdown" };
+    }
+  } else if (toolName === "eliminar_archivo") {
+    bridgeAction = "delete_path";
+    bridgePayload = { path: toolArgs?.ruta || target };
+  }
+
+  if (!bridgeAction) {
+    return res.status(400).json({
+      success: false,
+      executed: false,
+      message: `No sé cómo ejecutar la herramienta '${toolName}' de forma real todavía.`
+    });
+  }
+
+  const result = await callLocalBridge(bridgeAction, bridgePayload);
+  return res.status(result.status === 200 ? 200 : result.status).json({
+    success: result.ok,
+    executed: result.ok && result.data?.success !== false,
+    message: result.ok
+      ? (result.data?.message || `Acción sobre '${target}' ejecutada por el puente local.`)
+      : (result.data?.error || `No se pudo ejecutar la acción sobre '${target}'.`)
+  });
 });
 
 // =========================================================================

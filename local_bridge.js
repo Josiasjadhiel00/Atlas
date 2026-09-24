@@ -25,6 +25,27 @@ const BRIDGE_TOKEN = process.env.ATLAS_BRIDGE_TOKEN || crypto.randomBytes(24).to
 // de la víctima).
 const ALLOWED_ORIGIN = process.env.ATLAS_APP_ORIGIN || 'http://localhost:3000';
 
+// SEGURIDAD: eliminar_archivo NUNCA borra fuera de esta carpeta, sin
+// importar lo que pida el modelo de IA. Por defecto tu Escritorio; puedes
+// apuntarlo a una carpeta de trabajo dedicada con ATLAS_SAFE_DELETE_ROOT.
+const SAFE_DELETE_ROOT = fs.realpathSync(
+  process.env.ATLAS_SAFE_DELETE_ROOT || path.join(os.homedir(), 'Desktop')
+);
+
+function resolveSafeDeleteTarget(rawPath) {
+  if (!rawPath) return null;
+  let candidate = String(rawPath).replace(/^~/, os.homedir());
+  if (!path.isAbsolute(candidate)) candidate = path.join(SAFE_DELETE_ROOT, candidate);
+  let real;
+  try {
+    real = fs.realpathSync(candidate);
+  } catch {
+    return null; // no existe
+  }
+  if (real === SAFE_DELETE_ROOT || !real.startsWith(SAFE_DELETE_ROOT + path.sep)) return null;
+  return real;
+}
+
 function timingSafeEqual(a, b) {
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
@@ -135,11 +156,58 @@ const server = http.createServer((req, res) => {
         // lista blanca de comandos permitidos en vez de aceptar cualquier
         // string.
 
-        // 6. Apagado
-        else if (action === 'shutdown_pc') {
-          if (process.platform === 'win32') exec('shutdown /s /t 60');
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, message: 'Apagado programado en 60s' }));
+        // 6. Apagar / suspender / bloquear / cancelar apagado. Esta acción
+        // solo llega aquí después de que el usuario confirmó explícitamente
+        // en pantalla (ver server.ts /api/assistant/confirm).
+        else if (action === 'system_power') {
+          const sub = payload.action;
+          const plat = process.platform;
+          const run = (cmd) => exec(cmd, () => {});
+          if (sub === 'shutdown') {
+            if (plat === 'win32') run('shutdown /s /t 60');
+            else if (plat === 'darwin') run('osascript -e \'tell app "System Events" to shut down\'');
+            else run('shutdown -h +1');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: 'Secuencia de apagado iniciada (60s). Puedes cancelarla.' }));
+          } else if (sub === 'sleep') {
+            if (plat === 'win32') run('rundll32.exe powrprof.dll,SetSuspendState 0,1,0');
+            else if (plat === 'darwin') run('pmset sleepnow');
+            else run('systemctl suspend');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: 'Sistema suspendido' }));
+          } else if (sub === 'lock') {
+            if (plat === 'win32') run('rundll32.exe user32.dll,LockWorkStation');
+            else if (plat === 'darwin') run('pmset displaysleepnow');
+            else run('loginctl lock-session');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: 'Estación bloqueada' }));
+          } else if (sub === 'cancel_shutdown') {
+            if (plat === 'win32') run('shutdown /a');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: 'Apagado cancelado' }));
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Sub-acción de energía desconocida: ${sub}` }));
+          }
+        }
+        // 7. Eliminar archivo/carpeta — NUNCA borra de verdad: lo mueve a
+        // una subcarpeta "Atlas_Trash" dentro de la zona segura, y solo si
+        // la ruta cae dentro de SAFE_DELETE_ROOT. Así una orden mal
+        // interpretada (por la IA o por ti) sigue siendo reversible.
+        else if (action === 'delete_path') {
+          const realTarget = resolveSafeDeleteTarget(payload.path);
+          if (!realTarget) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Ruta fuera de la zona segura (${SAFE_DELETE_ROOT}) o inexistente. No se borró nada.` }));
+          } else {
+            const trashDir = path.join(SAFE_DELETE_ROOT, 'Atlas_Trash');
+            fs.mkdirSync(trashDir, { recursive: true });
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const dest = path.join(trashDir, `${stamp}_${path.basename(realTarget)}`);
+            fs.renameSync(realTarget, dest);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: `Movido a la papelera de Atlas: ${dest}`, trashed_to: dest }));
+          }
         } else {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'Acción desconocida' }));
