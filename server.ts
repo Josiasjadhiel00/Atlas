@@ -1,6 +1,7 @@
 import express from "express";
 import http from "http";
 import path from "path";
+import os from "os";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -12,6 +13,38 @@ import { atlasDeviceRegistry } from "./core/devices/deviceRegistry";
 import { atlasTools } from "./core/tools/registry";
 import { atlasWebSocketServer } from "./api/websocketServer";
 import { RealSystemStatus } from "./core/types";
+
+// =========================================================================
+// MÉTRICAS REALES DEL SISTEMA (reemplaza los valores inventados que había
+// antes: "cpu_load_simulated", "confidence" fijo, "core_temp" fijo, IP
+// simulada, conteo de dispositivos hardcodeado, latencias con Math.random).
+// =========================================================================
+function getRealLanIp(): string {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "127.0.0.1";
+}
+
+function getRealDiagnostics(latencyMs: number) {
+  const loadAvg = os.loadavg()[0]; // carga promedio del último minuto
+  const cpuCount = os.cpus().length || 1;
+  const cpuLoadPercent = Math.min(100, Math.round((loadAvg / cpuCount) * 100));
+  const usedMemMb = Math.round((os.totalmem() - os.freemem()) / 1024 / 1024);
+  return {
+    latency_ms: latencyMs,
+    cpu_load_percent: cpuLoadPercent,
+    memory_used_mb: usedMemMb,
+    // No se reporta temperatura de núcleo: Node no puede leerla de forma
+    // confiable sin un paquete nativo adicional, y antes era un string
+    // inventado ("37°C") que no medía nada real.
+  };
+}
 
 dotenv.config({ override: true });
 
@@ -338,9 +371,9 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/lan-info", (_req, res) => {
   res.json({
     local_port: PORT,
-    ws_endpoint: "/ws/hud",
-    simulated_lan_ip: "192.168.1.85",
-    devices_connected: 2,
+    ws_endpoint: "/ws/atlas",
+    lan_ip: getRealLanIp(),
+    devices_connected: atlasDeviceRegistry.getOnlineCount(),
     active_protocols: ["WebSocket Duplex", "HTTP REST Function Calling", "Web Audio PCM"]
   });
 });
@@ -445,6 +478,8 @@ async function callLocalBridge(action: string, payload: any): Promise<{ ok: bool
   }
 }
 
+const LOCAL_BRIDGE_DEVICE_ID = "device_pc_local_bridge";
+
 app.get("/api/bridge/status", async (_req, res) => {
   try {
     const controller = new AbortController();
@@ -453,9 +488,26 @@ app.get("/api/bridge/status", async (_req, res) => {
     clearTimeout(timeout);
     if (bridgeRes.ok) {
       const data = await bridgeRes.json();
+      // Registro real: solo cuando el puente local de verdad respondió,
+      // con la info real que él mismo reportó (no un nombre/IP inventados).
+      atlasDeviceRegistry.registerDevice({
+        id: LOCAL_BRIDGE_DEVICE_ID,
+        name: "PC (puente local)",
+        type: "pc",
+        status: "online",
+        isCurrentDevice: true,
+        lastSeen: new Date().toISOString(),
+        ip: "127.0.0.1",
+        os: data?.platform ? `${data.platform}${data.user ? ` // ${data.user}` : ""}` : (data?.os || "desconocido"),
+        capabilities: ["aplicaciones", "archivos", "energia", "automatizacion_local"],
+        permissions: ["filesystem.write", "applications.open", "system.power"]
+      });
       return res.json({ connected: true, data });
     }
   } catch {}
+  if (atlasDeviceRegistry.getDeviceById(LOCAL_BRIDGE_DEVICE_ID)) {
+    atlasDeviceRegistry.updateHeartbeat(LOCAL_BRIDGE_DEVICE_ID, undefined, "offline");
+  }
   return res.json({ connected: false, error: "Puente local no detectado en 127.0.0.1:5000" });
 });
 
@@ -1335,37 +1387,35 @@ ${customFunctionsContext}
       hud_status: "EXECUTION_COMPLETE",
       hud_state: hudState,
       diagnostic_data: {
-        confidence: 0.99,
         intent: toolName,
         active_model: activeModelUsed,
-        latency_ms: latencyMs,
-        cpu_load_simulated: "12%",
-        core_temp: "38°C"
+        ...getRealDiagnostics(latencyMs)
       }
     });
   } catch (error: any) {
     console.error("Error processing assistant query:", error);
     const latencyMs = Date.now() - startTime;
+    // Honesto: antes este bloque decía "todos los subsistemas estables"
+    // cuando en realidad algo había fallado (excepción atrapada arriba).
+    // Sigue con el tono calmado de Atlas, pero sin fingir que no pasó nada.
     return res.json({
-      status: "success",
+      status: "error",
       action: "NONE",
       target: "system",
       parameters: {},
-      message: "Directiva táctica procesada por el protocolo de contingencia de Atlas. Todos los subsistemas se mantienen estables.",
-      speech: "Directiva recibida y canalizada en modo seguro por el protocolo de contingencia de Atlas.",
+      message: "Tuve un tropiezo interno procesando esa solicitud. Puedes intentarlo de nuevo; si se repite, revisa los logs del servidor.",
+      speech: "Tuve un tropiezo interno procesando eso. ¿Lo intentamos otra vez?",
       category: "conversation",
       sources: [],
       requires_confirmation: false,
       confirmation_target: "",
-      hud_status: "EXECUTION_COMPLETE",
-      hud_state: "speaking",
+      hud_status: "EXECUTION_ERROR",
+      hud_state: "idle",
       diagnostic_data: {
-        confidence: 0.95,
-        intent: "contingency_resolution",
-        active_model: "atlas_contingency_core",
-        latency_ms: latencyMs,
-        cpu_load_simulated: "11%",
-        core_temp: "37°C"
+        intent: "error_recovery",
+        active_model: activeModelUsed,
+        error: error?.message || "unknown_error",
+        ...getRealDiagnostics(latencyMs)
       }
     });
   }
@@ -1427,6 +1477,7 @@ app.post("/api/assistant/confirm", async (req, res) => {
 
 // 1. Real System Status Endpoint
 app.get("/api/core/status", (_req, res) => {
+  const statusStart = Date.now();
   const onlineDevices = atlasDeviceRegistry.getOnlineCount();
   const allDevices = atlasDeviceRegistry.getAllDevices();
   const memoryStats = atlasMemory.getStats();
@@ -1436,8 +1487,10 @@ app.get("/api/core/status", (_req, res) => {
     aiModel: {
       status: process.env.GEMINI_API_KEY ? "connected" : "degraded",
       name: process.env.GEMINI_API_KEY ? "Gemini 2.5 Flash // Neural Core" : "Motor Heurístico Local // Standalone",
-      provider: process.env.GEMINI_API_KEY ? "gemini" : "heuristic",
-      latencyMs: Math.floor(18 + Math.random() * 12)
+      provider: process.env.GEMINI_API_KEY ? "gemini" : "heuristic"
+      // NOTA: antes había un "latencyMs" aquí generado con Math.random().
+      // Se quitó: no se hizo ninguna llamada real al modelo en este
+      // endpoint, así que no hay una latencia real que reportar.
     },
     internet: {
       status: "connected",
@@ -1463,7 +1516,7 @@ app.get("/api/core/status", (_req, res) => {
       onlineCount: onlineDevices,
       devices: allDevices
     },
-    latencyMs: Math.floor(16 + Math.random() * 8),
+    latencyMs: Date.now() - statusStart, // tiempo real de armar esta respuesta
     lastUpdated: new Date().toISOString()
   };
 
