@@ -7,7 +7,12 @@ import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 
-import { atlasAgent } from "./core/agents/atlasAgent";
+// NOTA: antes había aquí un import de "./core/agents/atlasAgent" — un
+// segundo "cerebro" completo (agente + core/brain/geminiEngine.ts) que
+// nunca llegó a conectarse al frontend real. Se eliminó junto con su
+// endpoint /api/core/agent/execute (ver más abajo, sección 5). El resto de
+// core/ (memoria, dispositivos, catálogo de herramientas) sí se usa en
+// producción y se queda igual.
 import { atlasMemory } from "./core/memory/memoryManager";
 import { atlasDeviceRegistry } from "./core/devices/deviceRegistry";
 import { atlasTools } from "./core/tools/registry";
@@ -1609,25 +1614,11 @@ app.get("/api/core/tools", (_req, res) => {
   res.json({ success: true, count: tools.length, tools });
 });
 
-// 5. Atlas Agent Execution Endpoint
-app.post("/api/core/agent/execute", async (req, res) => {
-  try {
-    const { prompt, deviceId, deviceName, confirmed } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ success: false, error: "prompt es requerido." });
-    }
-
-    const result = await atlasAgent.executePlan(prompt, {
-      deviceId: deviceId || "web-client",
-      deviceName: deviceName || "Portal Web",
-      userConfirmedDestructiveAction: Boolean(confirmed)
-    });
-
-    res.json({ success: true, result });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// NOTA: aquí vivía "/api/core/agent/execute", la ruta que llamaba al
+// atlasAgent eliminado. No la sustituyo por nada: el endpoint que el
+// frontend usa de verdad es /api/assistant/process, más arriba en este
+// archivo, que ya tiene function calling nativo, memoria, tareas y el
+// puente local conectados.
 
 // Vite Middleware for Dev and Static Files for Production
 async function startServer() {
