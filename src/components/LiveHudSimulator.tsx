@@ -192,6 +192,8 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     target: string;
     description: string;
+    toolName: string;
+    toolArgs: Record<string, any>;
   } | null>(null);
 
   // Active tool execution display
@@ -579,33 +581,24 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       }
     }
 
-    // 2. Try Node backend proxy first (/api/bridge/action)
+    // 2. Backend proxy autenticado (/api/bridge/action). El puente local ya
+    // no acepta conexiones sin el token compartido, así que este es el
+    // único camino válido — no hay fallback directo del navegador a
+    // localhost:5000 (eso reabriría el hueco de seguridad ya cerrado).
     try {
       const proxyRes = await fetch('/api/bridge/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, payload })
       });
-      if (proxyRes.ok) {
-        const data = await proxyRes.json();
-        return data;
+      const data = await proxyRes.json();
+      if (!proxyRes.ok) {
+        return { success: false, error: data.error || 'El servidor rechazó la acción.' };
       }
-    } catch {}
-
-    // 3. Fallback direct fetch to localhost:5000
-    try {
-      const res = await fetch('http://localhost:5000', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, payload })
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err: any) {
-      return { success: false, error: 'No se pudo conectar con el puente local en localhost:5000' };
+      return data;
+    } catch {
+      return { success: false, error: 'No se pudo comunicar con el backend de Atlas.' };
     }
-    return { success: false };
   };
 
   const handleDownloadBridge = (type: 'python' | 'node') => {
@@ -1066,7 +1059,9 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
       if (data.requires_confirmation && securityPermissions.requireConfirmForTerminal) {
         setPendingConfirmation({
           target: data.confirmation_target || 'Operación Crítica',
-          description: data.message || 'Esta acción requiere confirmación expresa de seguridad.'
+          description: data.message || 'Esta acción requiere confirmación expresa de seguridad.',
+          toolName: data.action || 'NONE',
+          toolArgs: data.parameters || {}
         });
       }
 
@@ -1110,26 +1105,32 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
   // Confirmation resolution
   const handleConfirmation = async (approved: boolean) => {
     if (!pendingConfirmation) return;
-    const target = pendingConfirmation.target;
+    const { target, toolName, toolArgs } = pendingConfirmation;
     setPendingConfirmation(null);
 
     try {
       const res = await fetch('/api/assistant/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, approved })
+        body: JSON.stringify({ target, toolName, toolArgs, approved })
       });
       const data = await res.json();
-      
+
       if (approved) {
-        sciFiAudio.playConfirmSound();
-        addLog('SYSTEM', `🛡️ [CONFIRMADO]: ${data.message}`);
+        if (data.executed) {
+          sciFiAudio.playConfirmSound();
+          addLog('SYSTEM', `🛡️ [CONFIRMADO Y EJECUTADO]: ${data.message}`);
+        } else {
+          sciFiAudio.playBlip();
+          addLog('SYSTEM', `⚠️ [CONFIRMADO PERO NO EJECUTADO]: ${data.message}`);
+        }
       } else {
         sciFiAudio.playBlip();
         addLog('SYSTEM', `❌ [CANCELADO]: ${data.message}`);
       }
     } catch (e) {
       console.error(e);
+      addLog('SYSTEM', `⚠️ [ERROR DE CONFIRMACIÓN]: No se pudo comunicar con el núcleo Atlas.`);
     }
   };
 
