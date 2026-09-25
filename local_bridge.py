@@ -121,62 +121,80 @@ class JarvisBridgeHandler(BaseHTTPRequestHandler):
         print(f"  Detalles: {payload}")
 
         try:
-            # 1. Abrir aplicación / Programa en Windows/Mac
+            # 1. Abrir aplicación / Programa — SEGURIDAD: antes, cualquier
+            # nombre desconocido caía en `subprocess.Popen([app_name],
+            # shell=True)`, que interpreta el string en una shell real: un
+            # nombre con `; rm -rf ~` habría ejecutado ese comando también.
+            # Ahora solo se abre lo que está en esta lista blanca, y SIN
+            # shell=True en ningún caso (no hace falta: no se usan
+            # características de shell en ninguna de estas llamadas).
             if action == "open_app" or action == "open_program":
                 app_name = payload.get("name", "").lower()
                 if "code" in app_name or "vs code" in app_name or "visual studio" in app_name:
-                    subprocess.Popen(["code"], shell=True)
+                    subprocess.Popen(["code"])
                     res = {"success": True, "message": "Visual Studio Code iniciado"}
                 elif "chrome" in app_name:
                     if platform.system() == "Windows":
-                        subprocess.Popen(["start", "chrome"], shell=True)
+                        subprocess.Popen(["cmd.exe", "/c", "start", "chrome"])
                     else:
                         subprocess.Popen(["open", "-a", "Google Chrome"])
                     res = {"success": True, "message": "Google Chrome iniciado"}
                 elif "spotify" in app_name:
                     if platform.system() == "Windows":
-                        subprocess.Popen(["start", "spotify"], shell=True)
+                        subprocess.Popen(["cmd.exe", "/c", "start", "spotify"])
                     else:
                         subprocess.Popen(["open", "-a", "Spotify"])
                     res = {"success": True, "message": "Spotify iniciado"}
                 elif "notepad" in app_name or "bloc de notas" in app_name:
-                    subprocess.Popen(["notepad.exe"], shell=True)
+                    subprocess.Popen(["notepad.exe"])
                     res = {"success": True, "message": "Bloc de notas abierto"}
                 elif "calculator" in app_name or "calculadora" in app_name:
                     if platform.system() == "Windows":
-                        subprocess.Popen(["calc.exe"], shell=True)
+                        subprocess.Popen(["calc.exe"])
                     else:
                         subprocess.Popen(["open", "-a", "Calculator"])
                     res = {"success": True, "message": "Calculadora abierta"}
                 else:
-                    subprocess.Popen([app_name], shell=True)
-                    res = {"success": True, "message": f"Comando '{app_name}' ejecutado"}
+                    res = {"success": False, "error": f"No conozco la app '{app_name}'. Añádela a este archivo (con una lista de argumentos, sin shell=True) para poder abrirla de forma segura."}
 
-            # 2. Crear carpeta en el Escritorio o ruta específica
+            # 2. Crear carpeta en el Escritorio — SEGURIDAD: contenida
+            # dentro de Desktop pase lo que pase en el nombre pedido.
             elif action == "create_folder":
                 folder_name = payload.get("name", "Nueva_Carpeta_JARVIS")
                 desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-                target = os.path.join(desktop, folder_name)
-                os.makedirs(target, exist_ok=True)
-                res = {"success": True, "path": target, "message": f"Carpeta '{folder_name}' creada en Escritorio"}
+                target = os.path.realpath(os.path.join(desktop, folder_name))
+                if target != desktop and not target.startswith(desktop + os.sep):
+                    res = {"success": False, "error": "Nombre de carpeta inválido (se sale del Escritorio)."}
+                else:
+                    os.makedirs(target, exist_ok=True)
+                    res = {"success": True, "path": target, "message": f"Carpeta creada en Escritorio"}
 
-            # 3. Abrir Explorador de Archivos
+            # 3. Abrir Explorador de Archivos — SEGURIDAD: ya no crea
+            # carpetas nuevas en cualquier parte del disco; solo abre lo
+            # que ya existe.
             elif action == "open_folder":
                 target = payload.get("path", "~/Desktop").replace("~", os.path.expanduser("~"))
-                os.makedirs(target, exist_ok=True)
-                if platform.system() == "Windows":
-                    os.startfile(target)
-                elif platform.system() == "Darwin":
-                    subprocess.Popen(["open", target])
+                if not os.path.isdir(target):
+                    res = {"success": False, "error": f"No existe: {target}"}
                 else:
-                    subprocess.Popen(["xdg-open", target])
-                res = {"success": True, "path": target, "message": f"Carpeta '{target}' abierta"}
+                    if platform.system() == "Windows":
+                        os.startfile(target)
+                    elif platform.system() == "Darwin":
+                        subprocess.Popen(["open", target])
+                    else:
+                        subprocess.Popen(["xdg-open", target])
+                    res = {"success": True, "path": target, "message": f"Carpeta '{target}' abierta"}
 
-            # 4. Abrir URL / Navegador
+            # 4. Abrir URL / Navegador — SEGURIDAD: solo http(s); webbrowser
+            # no usa una shell así que no era inyectable, pero sí podía
+            # abrir esquemas raros (file://, etc).
             elif action == "open_url":
                 url = payload.get("url", "https://google.com")
-                webbrowser.open(url)
-                res = {"success": True, "url": url, "message": f"URL {url} abierta en navegador"}
+                if not (url.startswith("http://") or url.startswith("https://")):
+                    res = {"success": False, "error": "Solo se permiten URLs http:// o https://"}
+                else:
+                    webbrowser.open(url)
+                    res = {"success": True, "url": url, "message": f"URL {url} abierta en navegador"}
 
             # 5. NOTA DE SEGURIDAD: se eliminó "execute_command" (ejecutaba
             # cualquier comando de shell recibido por HTTP, sin restricción

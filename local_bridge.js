@@ -53,6 +53,55 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// SEGURIDAD: antes "abrir app" armaba un string de shell con el nombre que
+// llegara por HTTP (`exec(cmd, {shell:true})`), así que un nombre con
+// comillas o `;`/`&&` podía inyectar comandos. Ahora solo se puede abrir lo
+// que esté en esta lista, y se lanza con spawn() sin shell — el texto que
+// llega nunca se interpreta como comando, solo como argumento literal.
+const APP_LAUNCHERS = {
+  win32: {
+    code: ['cmd.exe', ['/c', 'code']],
+    chrome: ['cmd.exe', ['/c', 'start', '', 'chrome']],
+    spotify: ['cmd.exe', ['/c', 'start', '', 'spotify']],
+    notepad: ['notepad.exe', []],
+    calculator: ['calc.exe', []]
+  },
+  darwin: {
+    code: ['open', ['-a', 'Visual Studio Code']],
+    chrome: ['open', ['-a', 'Google Chrome']],
+    spotify: ['open', ['-a', 'Spotify']],
+    notepad: ['open', ['-a', 'TextEdit']],
+    calculator: ['open', ['-a', 'Calculator']]
+  },
+  linux: {
+    code: ['code', []],
+    chrome: ['google-chrome', []],
+    spotify: ['spotify', []],
+    notepad: ['gedit', []],
+    calculator: ['gnome-calculator', []]
+  }
+};
+
+function resolveAppKey(rawName) {
+  const n = String(rawName || '').toLowerCase();
+  if (n.includes('code') || n.includes('visual studio')) return 'code';
+  if (n.includes('chrome')) return 'chrome';
+  if (n.includes('spotify')) return 'spotify';
+  if (n.includes('notepad') || n.includes('notas') || n.includes('bloc')) return 'notepad';
+  if (n.includes('calc')) return 'calculator';
+  return null;
+}
+
+// SEGURIDAD: crea la carpeta SIEMPRE dentro de "root", sin importar cuántos
+// "../" traiga el nombre pedido — evita que "crear carpeta" se use para
+// escribir fuera de la zona esperada.
+function resolveWithinRoot(root, rawName) {
+  const safeName = String(rawName || 'Nueva_Carpeta_JARVIS');
+  const candidate = path.resolve(root, safeName);
+  if (candidate !== root && !candidate.startsWith(root + path.sep)) return null;
+  return candidate;
+}
+
 const server = http.createServer((req, res) => {
   const origin = req.headers.origin;
   if (origin === ALLOWED_ORIGIN) {
@@ -98,55 +147,88 @@ const server = http.createServer((req, res) => {
 
         console.log(`\n[STARK PROTOCOL] Ejecutando: ${action}`, payload);
 
-        // 1. Abrir aplicación
+        // 1. Abrir aplicación — solo desde la lista blanca APP_LAUNCHERS,
+        // lanzada con spawn() sin shell (ver nota de seguridad arriba).
         if (action === 'open_app' || action === 'open_program') {
-          const appName = (payload.name || '').toLowerCase();
-          let cmd = payload.name;
-          if (appName.includes('code') || appName.includes('vs code') || appName.includes('visual studio')) {
-            cmd = 'code';
-          } else if (appName.includes('chrome')) {
-            cmd = process.platform === 'win32' ? 'start chrome' : 'open -a "Google Chrome"';
-          } else if (appName.includes('spotify')) {
-            cmd = process.platform === 'win32' ? 'start spotify' : 'open -a Spotify';
-          } else if (appName.includes('notepad') || appName.includes('notas')) {
-            cmd = 'notepad.exe';
-          } else if (appName.includes('calc')) {
-            cmd = process.platform === 'win32' ? 'calc.exe' : 'open -a Calculator';
+          const appName = String(payload.name || '');
+          const key = resolveAppKey(appName);
+          const table = APP_LAUNCHERS[process.platform] || APP_LAUNCHERS.linux;
+          const launcher = key ? table[key] : null;
+
+          if (!launcher) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: false,
+              error: `No conozco la app "${appName}". Añádela a APP_LAUNCHERS en local_bridge.js para poder abrirla de forma segura.`
+            }));
+            return;
           }
 
-          exec(cmd, { shell: true }, (err) => {
+          const [cmd, args] = launcher;
+          try {
+            const child = spawn(cmd, args, { shell: false, detached: true, stdio: 'ignore' });
+            child.on('error', (err) => {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, error: err.message }));
+            });
+            child.unref();
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: !err, message: `Aplicación ejecutada: ${cmd}`, error: err ? err.message : null }));
-          });
+            res.end(JSON.stringify({ success: true, message: `Aplicación ejecutada: ${key}` }));
+          } catch (err) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+          }
         }
-        // 2. Crear carpeta en escritorio
+        // 2. Crear carpeta en escritorio — contenida dentro de Desktop pase
+        // lo que pase en el nombre (ver resolveWithinRoot).
         else if (action === 'create_folder') {
-          const folderName = payload.name || 'Nueva_Carpeta_JARVIS';
           const desktop = path.join(os.homedir(), 'Desktop');
-          const target = path.join(desktop, folderName);
-          fs.mkdirSync(target, { recursive: true });
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, path: target, message: `Carpeta ${folderName} creada en Escritorio` }));
+          const target = resolveWithinRoot(desktop, payload.name);
+          if (!target) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Nombre de carpeta inválido (se sale del Escritorio).' }));
+          } else {
+            fs.mkdirSync(target, { recursive: true });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, path: target, message: `Carpeta creada en Escritorio` }));
+          }
         }
-        // 3. Abrir carpeta en explorador
+        // 3. Abrir carpeta en explorador — spawn() sin shell (sin
+        // interpolar el path en un string de comando), y solo si ya existe
+        // (no crea directorios nuevos en cualquier parte del disco).
         else if (action === 'open_folder') {
-          const raw = payload.path || '~/Desktop';
+          const raw = String(payload.path || '~/Desktop');
           const target = raw.replace(/^~/, os.homedir());
-          fs.mkdirSync(target, { recursive: true });
-          const cmd = process.platform === 'win32' ? `explorer "${target}"` : process.platform === 'darwin' ? `open "${target}"` : `xdg-open "${target}"`;
-          exec(cmd, (err) => {
+          if (!fs.existsSync(target)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `No existe: ${target}` }));
+          } else {
+            const [cmd, args] = process.platform === 'win32' ? ['explorer.exe', [target]]
+              : process.platform === 'darwin' ? ['open', [target]]
+              : ['xdg-open', [target]];
+            const child = spawn(cmd, args, { shell: false, detached: true, stdio: 'ignore' });
+            child.unref();
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: !err, path: target }));
-          });
+            res.end(JSON.stringify({ success: true, path: target }));
+          }
         }
-        // 4. Abrir URL
+        // 4. Abrir URL — solo http(s), spawn() sin shell.
         else if (action === 'open_url') {
-          const url = payload.url || 'https://google.com';
-          const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
-          exec(cmd, () => {
+          const rawUrl = String(payload.url || 'https://google.com');
+          let parsed;
+          try { parsed = new URL(rawUrl); } catch { parsed = null; }
+          if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Solo se permiten URLs http:// o https://' }));
+          } else {
+            const [cmd, args] = process.platform === 'win32' ? ['cmd.exe', ['/c', 'start', '', parsed.toString()]]
+              : process.platform === 'darwin' ? ['open', [parsed.toString()]]
+              : ['xdg-open', [parsed.toString()]];
+            const child = spawn(cmd, args, { shell: false, detached: true, stdio: 'ignore' });
+            child.unref();
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, url }));
-          });
+            res.end(JSON.stringify({ success: true, url: parsed.toString() }));
+          }
         }
         // 5. NOTA DE SEGURIDAD: se eliminó "execute_command" (ejecutaba
         // cualquier comando de shell recibido por HTTP, sin restricción de

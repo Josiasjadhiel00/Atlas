@@ -2,10 +2,20 @@ import express from "express";
 import http from "http";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import {
+  ACCESS_PASSWORD,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  parseCookies,
+  signSession,
+  verifySession,
+  isRateLimited
+} from "./auth";
 
 // NOTA: antes había aquí un import de "./core/agents/atlasAgent" — un
 // segundo "cerebro" completo (agente + core/brain/geminiEngine.ts) que
@@ -57,6 +67,61 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: "25mb" }));
+
+// =========================================================================
+// AUTENTICACIÓN — antes NO existía ninguna. Cualquiera que llegara a este
+// servidor (por red local o, si algún día lo despliegas como "Portal Web
+// Remoto", por internet) podía pedirle a Atlas que abriera apps, borrara
+// archivos o apagara el equipo sin identificarse de ninguna forma. Esto
+// exige una sola contraseña compartida (no hay multiusuario todavía) antes
+// de dejar pasar cualquier llamada a /api/*, salvo el propio login. La
+// lógica de firmar/verificar sesión vive en ./auth (compartida con el
+// WebSocket en api/websocketServer.ts).
+// =========================================================================
+
+app.post("/api/auth/login", (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  if (isRateLimited(ip)) {
+    return res.status(429).json({ success: false, error: "Demasiados intentos. Espera un minuto e inténtalo de nuevo." });
+  }
+  if (!ACCESS_PASSWORD) {
+    return res.status(500).json({ success: false, error: "ATLAS_ACCESS_PASSWORD no está configurada en el servidor." });
+  }
+  const password = String(req.body?.password || "");
+  const a = Buffer.from(password);
+  const b = Buffer.from(ACCESS_PASSWORD);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) {
+    return res.status(401).json({ success: false, error: "Contraseña incorrecta." });
+  }
+  const token = signSession();
+  const secureFlag = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Strict${secureFlag}`);
+  return res.json({ success: true });
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict`);
+  res.json({ success: true });
+});
+
+app.get("/api/auth/status", (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  res.json({
+    authenticated: verifySession(cookies[SESSION_COOKIE]),
+    passwordConfigured: Boolean(ACCESS_PASSWORD)
+  });
+});
+
+// Todo lo demás bajo /api/ exige una sesión válida. El login/logout/status
+// de arriba quedan fuera a propósito: si también los protegiéramos, nadie
+// podría iniciar sesión nunca.
+app.use("/api", (req, res, next) => {
+  if (req.path.startsWith("/auth/")) return next();
+  const cookies = parseCookies(req.headers.cookie);
+  if (verifySession(cookies[SESSION_COOKIE])) return next();
+  return res.status(401).json({ success: false, error: "No autenticado. Inicia sesión primero." });
+});
 
 // =========================================================================
 // MULTI-ENGINE AI PROVIDER DETECTION & INITIALIZATION (OPENAI / GROQ / GEMINI)
@@ -162,8 +227,8 @@ function getAIConfig(): AIProviderConfig {
     return {
       openAIClient: null,
       provider: "gemini",
-      activeModel: "gemini-3.8-flash",
-      candidateModels: ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"],
+      activeModel: "gemini-3.6-flash",
+      candidateModels: ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"],
       baseURL: "https://generativelanguage.googleapis.com",
       isGroq: false
     };
@@ -255,7 +320,7 @@ app.post("/api/assistant/analyze-image", async (req, res) => {
     if (gemini) {
       try {
         const resp = await gemini.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-3.6-flash",
           contents: [
             {
               role: "user",
@@ -267,7 +332,7 @@ app.post("/api/assistant/analyze-image", async (req, res) => {
           ]
         });
         if (resp && resp.text) {
-          return res.json({ success: true, analysis: resp.text.trim(), model: "gemini-3.8-flash" });
+          return res.json({ success: true, analysis: resp.text.trim(), model: "gemini-3.6-flash" });
         }
       } catch (gemErr: any) {
         console.warn("[VISION] Gemini vision skipped:", gemErr?.message);
@@ -327,7 +392,7 @@ app.post("/api/assistant/transcribe-audio", async (req, res) => {
     if (gemini) {
       try {
         const resp = await gemini.models.generateContent({
-          model: "gemini-3.8-flash",
+          model: "gemini-3.6-flash",
           contents: [
             {
               role: "user",
@@ -701,7 +766,7 @@ app.get("/api/config/models", (_req, res) => {
 
   if (geminiAvailable) {
     models.push({
-      id: "gemini-3.8-flash",
+      id: "gemini-3.6-flash",
       name: "Gemini 3.8 Flash (Google)",
       description: "Canal multimodal nativo de Google Gemini.",
       tag: "Google",
@@ -1102,7 +1167,7 @@ ${customFunctionsContext}
       const gemini = getGemini();
       if (gemini) {
         try {
-          const candidateModels = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+          const candidateModels = ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-flash-latest"];
           for (const gModel of candidateModels) {
             try {
               const resp = await gemini.models.generateContent({
