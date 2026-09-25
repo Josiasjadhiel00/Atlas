@@ -190,7 +190,93 @@ export const sciFiAudio = new SciFiAudioEngine();
 
 /**
  * Síntesis de voz en español para el navegador (SpeechSynthesis) con soporte de ajustes personalizados
+ *
+ * NOTA IMPORTANTE: esto usa las voces del sistema operativo (Web Speech
+ * API), no una IA de voz real — por eso nunca va a sonar tan fluido como
+ * ElevenLabs u OpenAI TTS. Lo que SÍ se puede arreglar sin gastar nada es
+ * elegir bien, de entre las voces que ya trae Windows/el navegador, la
+ * mejor disponible: Windows 11 + Edge traen voces "Online (Natural)" que
+ * suenan bastante mejor que las voces SAPI5 clásicas, pero antes esta
+ * función ni siquiera esperaba a que la lista de voces terminara de cargar.
  */
+
+// Chrome/Edge cargan la lista de voces de forma ASÍNCRONA. Si se pregunta
+// demasiado pronto (por ejemplo, justo al abrir la app), getVoices() todavía
+// devuelve un array vacío y Atlas termina usando la voz por defecto del
+// sistema — normalmente la peor de todas. Este cache + promesa resuelve eso.
+let cachedVoices: SpeechSynthesisVoice[] = [];
+let voicesReadyPromise: Promise<SpeechSynthesisVoice[]> | null = null;
+
+function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (!('speechSynthesis' in window)) return Promise.resolve([]);
+  if (voicesReadyPromise) return voicesReadyPromise;
+
+  voicesReadyPromise = new Promise((resolve) => {
+    const existing = window.speechSynthesis.getVoices();
+    if (existing.length > 0) {
+      cachedVoices = existing;
+      resolve(existing);
+      return;
+    }
+
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cachedVoices = window.speechSynthesis.getVoices();
+      resolve(cachedVoices);
+    };
+
+    window.speechSynthesis.onvoiceschanged = finish;
+    // Respaldo por si 'voiceschanged' nunca llega (pasa en algunos
+    // navegadores/versiones): no dejamos la promesa colgada para siempre.
+    setTimeout(finish, 1200);
+  });
+
+  return voicesReadyPromise;
+}
+
+// Llama a esto una vez, temprano (por ejemplo al montar la app), para que
+// cuando el usuario realmente pida algo las voces ya estén cargadas y la
+// primera respuesta hablada no caiga en la voz por defecto.
+export function warmUpSpeechVoices() {
+  loadVoices();
+}
+
+// Orden de preferencia: primero voces "Online (Natural)"/"Neural" en
+// español (las de mejor calidad que trae Windows 11 + Edge), luego voces
+// masculinas conocidas por nombre, luego cualquier voz en español, y solo
+// si no hay ninguna, null (el navegador usará su propio default).
+function pickBestSpanishVoice(voices: SpeechSynthesisVoice[], voiceURI?: string): SpeechSynthesisVoice | undefined {
+  if (voiceURI) {
+    const exact = voices.find(v => v.voiceURI === voiceURI);
+    if (exact) return exact;
+  }
+
+  const esVoices = voices.filter(v => v.lang.toLowerCase().startsWith('es'));
+  if (esVoices.length === 0) return undefined;
+
+  const byNameIncludes = (needle: string) => esVoices.find(v => v.name.toLowerCase().includes(needle));
+
+  return (
+    // Voces neuronales "Online (Natural)" de Windows 11 / Edge — las mejores disponibles gratis
+    esVoices.find(v => /natural/i.test(v.name)) ||
+    esVoices.find(v => /neural/i.test(v.name)) ||
+    esVoices.find(v => /online/i.test(v.name)) ||
+    // Voces de Google (Chrome), buena calidad, generadas en la nube
+    esVoices.find(v => v.name.toLowerCase().includes('google')) ||
+    // Nombres masculinos conocidos en las voces clásicas de Windows/macOS
+    byNameIncludes('jorge') ||
+    byNameIncludes('álvaro') ||
+    byNameIncludes('alvaro') ||
+    byNameIncludes('raúl') ||
+    byNameIncludes('raul') ||
+    byNameIncludes('diego') ||
+    esVoices.find(v => v.lang === 'es-ES') ||
+    esVoices[0]
+  );
+}
+
 export function speakSpanish(
   text: string, 
   voiceName: AssistantVoiceName = 'Atlas', 
@@ -211,40 +297,56 @@ export function speakSpanish(
     return;
   }
 
-  window.speechSynthesis.cancel();
+  const buildAndSpeak = (voices: SpeechSynthesisVoice[]) => {
+    window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'es-ES';
-  
-  if (customSettings) {
-    utterance.pitch = customSettings.pitch !== undefined ? customSettings.pitch : 0.98;
-    utterance.rate = customSettings.rate !== undefined ? customSettings.rate : 1.06;
-    utterance.volume = customSettings.volume !== undefined ? customSettings.volume : 1.0;
-  } else {
-    utterance.pitch = 0.98;
-    utterance.rate = 1.06;
-  }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'es-ES';
 
-  // Buscar voz por voiceURI o por idioma español
-  const voices = window.speechSynthesis.getVoices();
-  if (customSettings?.voiceURI) {
-    const selected = voices.find(v => v.voiceURI === customSettings.voiceURI);
-    if (selected) utterance.voice = selected;
-  } else {
-    const spanishVoice = voices.find(v => v.lang.startsWith('es') && (
-      v.name.includes('Male') || v.name.includes('Jorge') || v.name.includes('Alvaro') || v.name.includes('Raul') || v.name.includes('Natural')
-    )) || voices.find(v => v.lang.startsWith('es'));
-
-    if (spanishVoice) {
-      utterance.voice = spanishVoice;
+    if (customSettings) {
+      utterance.pitch = customSettings.pitch !== undefined ? customSettings.pitch : 0.98;
+      utterance.rate = customSettings.rate !== undefined ? customSettings.rate : 1.06;
+      utterance.volume = customSettings.volume !== undefined ? customSettings.volume : 1.0;
+    } else {
+      utterance.pitch = 0.98;
+      utterance.rate = 1.06;
     }
-  }
 
-  if (onEnd) {
-    utterance.onend = onEnd;
-    utterance.onerror = onEnd;
-  }
+    const bestVoice = pickBestSpanishVoice(voices, customSettings?.voiceURI);
+    if (bestVoice) {
+      utterance.voice = bestVoice;
+      // Si la voz elegida es "es-MX" o similar, usa su propio lang en vez
+      // de forzar es-ES — evita que el motor la trate como mal encajada.
+      utterance.lang = bestVoice.lang;
+    }
 
-  window.speechSynthesis.speak(utterance);
+    // BUG CONOCIDO de Chrome/Edge en Windows: speechSynthesis se "pausa"
+    // sola en frases largas (a partir de ~15s) y el audio se corta a la
+    // mitad. Este keep-alive lo evita llamando resume() cada pocos
+    // segundos mientras la utterance sigue activa.
+    const keepAlive = setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      } else {
+        clearInterval(keepAlive);
+      }
+    }, 10000);
+
+    const cleanup = () => {
+      clearInterval(keepAlive);
+      if (onEnd) onEnd();
+    };
+    utterance.onend = cleanup;
+    utterance.onerror = cleanup;
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  if (cachedVoices.length > 0) {
+    buildAndSpeak(cachedVoices);
+  } else {
+    loadVoices().then(buildAndSpeak);
+  }
 }
 
