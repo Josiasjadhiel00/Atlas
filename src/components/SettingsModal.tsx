@@ -12,7 +12,7 @@ import {
 import { doc, setDoc, getDoc, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../lib/firebase';
 import { VoiceSettings, SecurityPermissions, UserNote, CustomApplication, CustomFunction } from '../types';
-import { sciFiAudio } from '../utils/audioSynth';
+import { sciFiAudio, speakSpanish } from '../utils/audioSynth';
 import { CustomAppsAndFunctionsConfig } from './CustomAppsAndFunctionsConfig';
 
 interface SettingsModalProps {
@@ -599,14 +599,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <button
                         onClick={() => {
                           sciFiAudio.playConfirmSound();
-                          if ('speechSynthesis' in window) {
-                            window.speechSynthesis.cancel();
-                            const utt = new SpeechSynthesisUtterance(trait.sample);
-                            utt.lang = 'es-ES';
-                            utt.rate = voiceSettings?.rate || 1.05;
-                            utt.pitch = voiceSettings?.pitch || 1.0;
-                            window.speechSynthesis.speak(utt);
-                          }
+                          // Antes esto armaba su propia utterance sin
+                          // asignarle ninguna voz, así que siempre sonaba
+                          // con la voz por defecto del navegador — sin
+                          // importar cuál eligieras arriba. Ahora usa la
+                          // misma función (y la misma selección de voz)
+                          // que el resto de Atlas.
+                          speakSpanish(trait.sample, undefined, {
+                            rate: voiceSettings?.rate,
+                            pitch: voiceSettings?.pitch,
+                            voiceURI: voiceSettings?.voiceURI
+                          });
                         }}
                         className="w-full py-1 text-[10px] font-bold text-[#00f2ff] bg-[#00f2ff11] hover:bg-[#00f2ff28] border border-[#00f2ff44] rounded flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                       >
