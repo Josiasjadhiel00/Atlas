@@ -1,13 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AssistantTheme, AssistantVoiceName } from './types';
 import { LiveHudSimulator } from './components/LiveHudSimulator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthGate } from './components/AuthGate';
+import { warmUpSpeechVoices } from './utils/audioSynth';
 
 export default function App() {
   const [theme, setTheme] = useState<AssistantTheme>('cyan');
   const [assistantName, setAssistantName] = useState<AssistantVoiceName>('Atlas');
   const [speechSynthesisActive, setSpeechSynthesisActive] = useState(true);
+
+  // Dispara la carga de voces del navegador apenas arranca la app, en vez
+  // de esperar a la primera vez que Atlas necesite hablar — así esa
+  // primera respuesta no cae en la voz por defecto por las prisas.
+  useEffect(() => {
+    warmUpSpeechVoices();
+  }, []);
 
   return (
     <ErrorBoundary>
