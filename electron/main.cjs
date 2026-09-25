@@ -1,8 +1,74 @@
 const { app, BrowserWindow, ipcMain, shell, session, systemPreferences } = require('electron');
 const path = require('path');
-const { exec, spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+
+// SEGURIDAD: solo estas tres carpetas pueden usarse como base para crear
+// carpetas, guardar notas o abrir rutas desde los canales IPC de abajo. La
+// versión anterior aceptaba CUALQUIER "parentPath"/"targetPath" tal cual
+// llegara, así que un script en la página podía pedir escribir en
+// cualquier parte del disco al que tuviera permiso tu usuario.
+const SAFE_BASE_DIRS = {
+  Desktop: path.join(os.homedir(), 'Desktop'),
+  Downloads: path.join(os.homedir(), 'Downloads'),
+  Documents: path.join(os.homedir(), 'Documents')
+};
+
+function resolveWithinBase(base, rawName) {
+  const safeName = String(rawName || '');
+  const candidate = path.resolve(base, safeName);
+  if (candidate !== base && !candidate.startsWith(base + path.sep)) return null;
+  return candidate;
+}
+
+// SEGURIDAD: lista blanca de apps conocidas, lanzadas con spawn() sin
+// shell — nunca con exec() de un string armado con el nombre que llegue.
+const APP_LAUNCHERS = {
+  win32: {
+    code: ['cmd.exe', ['/c', 'start', 'code']],
+    chrome: ['cmd.exe', ['/c', 'start', 'chrome']],
+    notepad: ['notepad.exe', []],
+    calc: ['calc.exe', []],
+    spotify: ['cmd.exe', ['/c', 'start', 'spotify:']],
+    discord: ['cmd.exe', ['/c', 'start', 'discord:']],
+    cmd: ['cmd.exe', ['/c', 'start', 'cmd']],
+    explorer: ['explorer.exe', ['.']]
+  },
+  darwin: {
+    code: ['open', ['-a', 'Visual Studio Code']],
+    chrome: ['open', ['-a', 'Google Chrome']],
+    notepad: ['open', ['-a', 'TextEdit']],
+    calc: ['open', ['-a', 'Calculator']],
+    spotify: ['open', ['-a', 'Spotify']],
+    discord: ['open', ['-a', 'Discord']],
+    cmd: ['open', ['-a', 'Terminal']],
+    explorer: ['open', ['.']]
+  },
+  linux: {
+    code: ['code', []],
+    chrome: ['google-chrome', []],
+    notepad: ['gedit', []],
+    calc: ['gnome-calculator', []],
+    spotify: ['spotify', []],
+    discord: ['discord', []],
+    cmd: ['x-terminal-emulator', []],
+    explorer: ['xdg-open', ['.']]
+  }
+};
+
+function resolveAppKey(rawName) {
+  const n = String(rawName || '').toLowerCase();
+  if (n.includes('code') || n.includes('vs code') || n.includes('visual studio')) return 'code';
+  if (n.includes('chrome') || n.includes('navegador')) return 'chrome';
+  if (n.includes('notepad') || n.includes('bloc')) return 'notepad';
+  if (n.includes('calc') || n.includes('calculadora')) return 'calc';
+  if (n.includes('spotify') || n.includes('musica')) return 'spotify';
+  if (n.includes('discord')) return 'discord';
+  if (n.includes('cmd') || n.includes('terminal')) return 'cmd';
+  if (n.includes('explorer') || n.includes('archivos') || n.includes('carpeta')) return 'explorer';
+  return null;
+}
 
 let mainWindow;
 
@@ -47,7 +113,12 @@ function createWindow() {
           title: 'Iniciar Sesión con Google',
           backgroundColor: '#ffffff',
           webPreferences: {
-            contextIsolation: false,
+            // SEGURIDAD: no hay razón para desactivar contextIsolation en
+            // una ventana que solo carga accounts.google.com/firebaseapp.com
+            // — nodeIntegration ya estaba en false, pero apagar
+            // contextIsolation también es una práctica insegura sin
+            // beneficio real aquí.
+            contextIsolation: true,
             nodeIntegration: false,
             userAgent: chromeUserAgent
           }
@@ -80,15 +151,18 @@ app.commandLine.appendSwitch('enable-features', 'AudioServiceOutOfProcess');
 app.whenReady().then(() => {
   // Conceder permisos de micrófono y medios de forma automática en Electron
   if (session.defaultSession) {
+    // SEGURIDAD: antes se aprobaba CUALQUIER permiso pedido (la rama
+    // "else" también hacía callback(true)) — incluida cámara, geolocalización,
+    // acceso al portapapeles, etc., sin preguntar nunca. Ahora solo se
+    // aprueban automáticamente los permisos de audio que Atlas
+    // legítimamente necesita para escucharte; todo lo demás se rechaza.
+    const AUTO_APPROVED_PERMISSIONS = ['media', 'audio-capture', 'media-devices', 'notifications'];
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-      if (['media', 'audio-capture', 'media-devices', 'notifications'].includes(permission)) {
-        return callback(true);
-      }
-      callback(true);
+      callback(AUTO_APPROVED_PERMISSIONS.includes(permission));
     });
 
     session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
-      return true;
+      return AUTO_APPROVED_PERMISSIONS.includes(permission);
     });
   }
 
@@ -113,81 +187,72 @@ app.on('activate', () => {
 });
 
 // =======================================================
-// CANALES NATIVOS IPC PARA CONTROL TOTAL DE WINDOWS/MAC
+// CANALES NATIVOS IPC — contextBridge los expone en el "main world" de la
+// página (ver preload.cjs), así que hay que tratar TODO lo que llega aquí
+// como si viniera de código no confiable, no solo de la UI de Atlas.
 // =======================================================
 
-// 1. Ejecutar comando de terminal o acción nativa de Windows
-ipcMain.handle('execute-system-command', async (event, command) => {
-  return new Promise((resolve) => {
-    // Soporte especial en Windows para 'start' de programas
-    let cmdToRun = command;
-    if (process.platform === 'win32' && !cmdToRun.toLowerCase().startsWith('powershell') && !cmdToRun.toLowerCase().startsWith('cmd')) {
-      cmdToRun = `start "" ${command}`;
-    }
-    exec(cmdToRun, { timeout: 15000, shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash' }, (error, stdout, stderr) => {
-      if (error) {
-        // En Windows muchos programas abren en background y retornan código 0 o mínimo aviso
-        resolve({ success: true, warning: error.message, output: stdout.trim() });
-      } else {
-        resolve({ success: true, output: stdout.trim() });
-      }
-    });
-  });
-});
+// 1. NOTA DE SEGURIDAD: aquí vivía "execute-system-command", que corría
+// cualquier string como comando de shell. Se eliminó por completo — era
+// la falla más grave de todo el proyecto: cualquier script en la página
+// (un XSS, una dependencia comprometida) podía ejecutar código arbitrario
+// con tus permisos de usuario, sin necesitar el puente local ni red.
 
-// 2. Abrir aplicaciones directamente reconocidas
+// 2. Abrir aplicaciones — solo desde la lista blanca APP_LAUNCHERS,
+// lanzada con spawn() sin shell (ver definición arriba).
 ipcMain.handle('open-system-app', async (event, appName) => {
-  const isWin = process.platform === 'win32';
-  const name = appName.toLowerCase();
-  let cmd = '';
+  const key = resolveAppKey(appName);
+  const table = APP_LAUNCHERS[process.platform] || APP_LAUNCHERS.linux;
+  const launcher = key ? table[key] : null;
 
-  if (name.includes('code') || name.includes('vs code') || name.includes('visual studio')) {
-    cmd = isWin ? 'start code' : 'code';
-  } else if (name.includes('chrome') || name.includes('navegador')) {
-    cmd = isWin ? 'start chrome' : 'open -a "Google Chrome"';
-  } else if (name.includes('notepad') || name.includes('bloc')) {
-    cmd = isWin ? 'notepad' : 'open -a TextEdit';
-  } else if (name.includes('calc') || name.includes('calculadora')) {
-    cmd = isWin ? 'calc' : 'open -a Calculator';
-  } else if (name.includes('spotify') || name.includes('musica')) {
-    cmd = isWin ? 'start spotify:' : 'open -a Spotify';
-  } else if (name.includes('discord')) {
-    cmd = isWin ? 'start discord:' : 'open -a Discord';
-  } else if (name.includes('cmd') || name.includes('terminal')) {
-    cmd = isWin ? 'start cmd' : 'open -a Terminal';
-  } else if (name.includes('explorer') || name.includes('archivos') || name.includes('carpeta')) {
-    cmd = isWin ? 'explorer .' : 'open .';
-  } else {
-    cmd = isWin ? `start ${appName}` : `open -a "${appName}"`;
+  if (!launcher) {
+    return { success: false, error: `No conozco la app "${appName}". Añádela a APP_LAUNCHERS en electron/main.cjs para abrirla de forma segura.` };
   }
 
+  const [cmd, args] = launcher;
   return new Promise((resolve) => {
-    exec(cmd, (err) => {
-      resolve({ success: true, message: `Ejecutando ${appName}` });
-    });
+    try {
+      const child = spawn(cmd, args, { shell: false, detached: true, stdio: 'ignore' });
+      child.on('error', (err) => resolve({ success: false, error: err.message }));
+      child.unref();
+      resolve({ success: true, message: `Ejecutando ${key}` });
+    } catch (err) {
+      resolve({ success: false, error: err.message });
+    }
   });
 });
 
-// 3. Abrir URLs en el navegador predeterminado de Windows
+// 3. Abrir URLs en el navegador predeterminado — solo http(s).
 ipcMain.handle('open-external-url', async (event, url) => {
   try {
-    await shell.openExternal(url);
+    const parsed = new URL(String(url || ''));
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { success: false, error: 'Solo se permiten URLs http:// o https://' };
+    }
+    await shell.openExternal(parsed.toString());
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
-// 4. Abrir carpeta en el explorador de archivos nativo
+// 4. Abrir carpeta en el explorador — SEGURIDAD: antes aceptaba
+// cualquier "targetPath" tal cual y creaba directorios nuevos en
+// cualquier parte del disco si no existían. Ahora solo abre rutas
+// existentes dentro de Desktop/Downloads/Documents.
 ipcMain.handle('open-system-folder', async (event, targetPath) => {
   try {
-    let resolved = (targetPath || '').replace(/^~/, os.homedir());
-    if (resolved === 'Desktop' || !resolved) resolved = path.join(os.homedir(), 'Desktop');
-    if (resolved === 'Downloads') resolved = path.join(os.homedir(), 'Downloads');
-    if (resolved === 'Documents') resolved = path.join(os.homedir(), 'Documents');
+    const key = ['Desktop', 'Downloads', 'Documents'].includes(targetPath) ? targetPath : 'Desktop';
+    const base = SAFE_BASE_DIRS[key];
+    const resolved = targetPath && !['Desktop', 'Downloads', 'Documents', ''].includes(targetPath)
+      ? resolveWithinBase(base, targetPath)
+      : base;
 
+    if (!resolved) {
+      return { success: false, error: 'Ruta fuera de la zona segura (Desktop/Downloads/Documents).' };
+    }
     if (!fs.existsSync(resolved)) {
-      fs.mkdirSync(resolved, { recursive: true });
+      return { success: false, error: `No existe: ${resolved}` };
     }
     await shell.openPath(resolved);
     return { success: true, path: resolved };
@@ -196,16 +261,19 @@ ipcMain.handle('open-system-folder', async (event, targetPath) => {
   }
 });
 
-// 5. Crear carpeta física en el disco
+// 5. Crear carpeta física — SEGURIDAD: antes "parentPath" podía ser
+// literalmente cualquier ruta del sistema. Ahora solo se puede crear
+// dentro de Desktop/Downloads/Documents, y el nombre no puede escaparse
+// con "../".
 ipcMain.handle('create-system-folder', async (event, folderName, parentPath = 'Desktop') => {
   try {
-    let base = os.homedir();
-    if (parentPath === 'Desktop') base = path.join(os.homedir(), 'Desktop');
-    else if (parentPath === 'Downloads') base = path.join(os.homedir(), 'Downloads');
-    else if (parentPath === 'Documents') base = path.join(os.homedir(), 'Documents');
-    else base = parentPath.replace(/^~/, os.homedir());
+    const key = ['Desktop', 'Downloads', 'Documents'].includes(parentPath) ? parentPath : 'Desktop';
+    const base = SAFE_BASE_DIRS[key];
+    const fullPath = resolveWithinBase(base, folderName || 'JARVIS_Workspace');
 
-    let fullPath = path.join(base, folderName || 'JARVIS_Workspace');
+    if (!fullPath) {
+      return { success: false, error: 'Nombre de carpeta inválido (se sale de la zona segura).' };
+    }
     if (!fs.existsSync(fullPath)) {
       fs.mkdirSync(fullPath, { recursive: true });
     }
@@ -215,22 +283,32 @@ ipcMain.handle('create-system-folder', async (event, folderName, parentPath = 'D
   }
 });
 
-// 6. Control de volumen nativo en Windows
+// 6. Control de volumen — SEGURIDAD: "level" se metía directo en un
+// script de PowerShell armado como string. Se valida y se fuerza a un
+// entero 0-100 antes de tocar cualquier comando.
 ipcMain.handle('set-system-volume', async (event, level) => {
+  const parsed = Number(level);
+  const safeLevel = Number.isFinite(parsed) ? Math.max(0, Math.min(100, Math.round(parsed))) : 50;
+
   if (process.platform === 'win32') {
-    // PowerShell simple command to adjust volume via WScript
-    const psScript = `$wsh = New-Object -ComObject WScript.Shell; 1..50 | % { $wsh.SendKeys([char]174) }; $steps = [math]::Round(${level} / 2); 1..$steps | % { $wsh.SendKeys([char]175) }`;
-    exec(`powershell -c "${psScript}"`);
+    const steps = Math.round(safeLevel / 2);
+    const psScript = `$wsh = New-Object -ComObject WScript.Shell; 1..50 | % { $wsh.SendKeys([char]174) }; 1..${steps} | % { $wsh.SendKeys([char]175) }`;
+    execFile('powershell.exe', ['-NoProfile', '-Command', psScript], () => {});
   }
-  return { success: true, volume: level };
+  return { success: true, volume: safeLevel };
 });
 
-// 7. Guardar Nota / Archivo de texto real
+// 7. Guardar nota — SEGURIDAD: "filename" no se validaba contra rutas
+// tipo "../../" para escaparse del Escritorio.
 ipcMain.handle('save-system-note', async (event, filename, content) => {
   try {
-    const desktop = path.join(os.homedir(), 'Desktop');
-    const safeName = filename.endsWith('.txt') ? filename : `${filename}.txt`;
-    const filePath = path.join(desktop, safeName);
+    const desktop = SAFE_BASE_DIRS.Desktop;
+    const rawName = String(filename || 'nota');
+    const safeName = rawName.endsWith('.txt') ? rawName : `${rawName}.txt`;
+    const filePath = resolveWithinBase(desktop, safeName);
+    if (!filePath) {
+      return { success: false, error: 'Nombre de archivo inválido (se sale del Escritorio).' };
+    }
     fs.writeFileSync(filePath, content || '', 'utf-8');
     return { success: true, path: filePath };
   } catch (err) {
