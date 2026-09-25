@@ -34,9 +34,15 @@ service cloud.firestore {
       }
     }
     
-    // Reglas de sincronización pública/dispositivo si se requiere
+    // SEGURIDAD: antes esta colección era pública total (allow read, write:
+    // if true) — cualquiera con internet, sin iniciar sesión, podía leer o
+    // escribir aquí. Ahora al menos exige estar autenticado con Firebase
+    // Auth. Si tus documentos de sync_devices guardan datos de un usuario
+    // en particular, lo ideal es además comparar un campo ownerUid contra
+    // request.auth.uid (no puedo inferir ese campo desde aquí sin ver cómo
+    // los escribe tu cliente).
     match /sync_devices/{deviceId} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null;
     }
 
     // Regla de verificación de conectividad
