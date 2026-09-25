@@ -3,6 +3,7 @@ import type { Server } from 'http';
 import { atlasDeviceRegistry } from '../core/devices/deviceRegistry';
 import { atlasMemory } from '../core/memory/memoryManager';
 import { atlasTools } from '../core/tools/registry';
+import { parseCookies, verifySession } from '../auth';
 
 interface ConnectedClient {
   connId: string;
@@ -17,7 +18,22 @@ class AtlasWebSocketServer {
   private clients: Map<string, ConnectedClient> = new Map();
 
   public init(httpServer: Server) {
-    this.wss = new WebSocketServer({ server: httpServer, path: '/ws/atlas' });
+    this.wss = new WebSocketServer({
+      server: httpServer,
+      path: '/ws/atlas',
+      // SEGURIDAD: antes cualquiera que abriera un socket a /ws/atlas
+      // quedaba conectado y podía registrarse como dispositivo sin
+      // identificarse. Ahora se exige la misma cookie de sesión que ya
+      // protege el resto de /api/* — se valida ANTES de aceptar la
+      // conexión, no después.
+      verifyClient: (info, callback) => {
+        const cookies = parseCookies(info.req.headers.cookie);
+        if (verifySession(cookies['atlas_session'])) {
+          return callback(true);
+        }
+        return callback(false, 401, 'No autenticado');
+      }
+    });
 
     this.wss.on('connection', (ws: WebSocket, req) => {
       const clientIp = req.socket.remoteAddress || '127.0.0.1';
