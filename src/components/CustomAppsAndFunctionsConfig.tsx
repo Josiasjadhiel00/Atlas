@@ -186,6 +186,15 @@ export const CustomAppsAndFunctionsConfig: React.FC<CustomAppsAndFunctionsConfig
       return;
     }
 
+    // Antes esto no revisaba duplicados (a diferencia de los presets, que
+    // sí lo hacen) — podías terminar con dos apps con el mismo nombre pero
+    // distinto id, y la que de verdad se ejecuta por voz sería siempre la
+    // primera de la lista, dejando la segunda como un fantasma inútil.
+    if (customApps.some(a => a.name.trim().toLowerCase() === appName.trim().toLowerCase())) {
+      showNotification(`⚠️ Ya existe una aplicación llamada '${appName.trim()}'.`);
+      return;
+    }
+
     const aliases = appAliases
       .split(',')
       .map(a => a.trim().toLowerCase())
@@ -265,6 +274,15 @@ export const CustomAppsAndFunctionsConfig: React.FC<CustomAppsAndFunctionsConfig
       .toLowerCase()
       .replace(/[^a-z0-9_]/g, '_')
       .replace(/_+/g, '_');
+
+    // Mismo problema que con las apps: sin este chequeo podías terminar con
+    // dos funciones con el mismo "name" interno — el que usa el sistema
+    // para saber cuál ejecutar — y solo la primera de la lista respondería
+    // de verdad por voz.
+    if (customFunctions.some(f => f.name === formattedName)) {
+      showNotification(`⚠️ Ya existe una función con el identificador '${formattedName}'. Cambia el título o el nombre interno.`);
+      return;
+    }
 
     const triggers = funcTriggers
       .split(',')

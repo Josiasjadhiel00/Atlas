@@ -877,10 +877,14 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         // D. Control de Aplicaciones (Personalizadas y del Sistema)
         else if (toolName === 'open_application' || toolName === 'abrir_aplicacion') {
           const targetRaw = toolArgs.target || toolArgs.app_name || toolArgs.nombre || (command.toLowerCase().includes('code') ? 'code' : 'chrome');
+          // Antes esto no revisaba "enabled": una app desactivada en Ajustes
+          // igual se podía abrir por voz. Ahora se ignoran las desactivadas.
           const matchedApp = customApps.find(a => 
-            a.name.toLowerCase() === String(targetRaw).toLowerCase() ||
-            (a.target && a.target.toLowerCase() === String(targetRaw).toLowerCase()) ||
-            (a.voiceAliases && a.voiceAliases.some(alias => command.toLowerCase().includes(alias.toLowerCase())))
+            a.enabled && (
+              a.name.toLowerCase() === String(targetRaw).toLowerCase() ||
+              (a.target && a.target.toLowerCase() === String(targetRaw).toLowerCase()) ||
+              (a.voiceAliases && a.voiceAliases.some(alias => command.toLowerCase().includes(alias.toLowerCase())))
+            )
           );
 
           const finalTarget = matchedApp ? matchedApp.target : targetRaw;
@@ -904,10 +908,29 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
         }
 
         // E. Funciones y Rutinas Tácticas Personalizadas
+        // Antes esto se evaluaba SIEMPRE que el bloque toolName !== 'NONE'
+        // corría, sin importar qué herramienta concreta hubiera elegido la
+        // IA (guardar_recuerdo, crear_tarea, abrir_aplicacion...) — así que
+        // una frase disparadora que fuera subcadena de un comando no
+        // relacionado (ej. "a estudiar" dentro de "voy a estudiar
+        // historia, resume esto") disparaba la rutina por accidente,
+        // además de la acción real que pediste. Ahora ese "atajo por
+        // subcadena" solo se usa cuando la IA NO reconoció ninguna
+        // herramienta propia de Atlas — si ya identificó algo concreto, se
+        // respeta eso y no se dispara nada más. También respeta "enabled".
+        const KNOWN_BUILTIN_TOOLS = new Set([
+          'guardar_recuerdo', 'crear_tarea', 'buscar_en_internet', 'buscar_documentacion',
+          'open_application', 'abrir_aplicacion', 'create_directory', 'crear_carpeta',
+          'crear_archivo', 'leer_archivo', 'system_control', 'eliminar_archivo',
+          'get_system_telemetry', 'get_system_time', 'get_system_date', 'consultar_tareas'
+        ]);
+        const isKnownBuiltInTool = KNOWN_BUILTIN_TOOLS.has(toolName);
         const matchedCustomFunc = customFunctions.find(f => 
-          f.name === toolName || 
-          f.title.toLowerCase() === toolName.toLowerCase() ||
-          (f.triggerPhrases && f.triggerPhrases.some(tp => command.toLowerCase().includes(tp.toLowerCase())))
+          f.enabled && (
+            f.name === toolName ||
+            f.title.toLowerCase() === toolName.toLowerCase() ||
+            (!isKnownBuiltInTool && f.triggerPhrases && f.triggerPhrases.some(tp => command.toLowerCase().includes(tp.toLowerCase())))
+          )
         );
 
         if (matchedCustomFunc) {

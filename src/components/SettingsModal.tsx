@@ -65,6 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [notes, setNotes] = useState<UserNote[]>([]);
 
   // Email form fields
@@ -244,22 +245,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const saveSettingsToCloud = async () => {
-    sciFiAudio.playConfirmSound();
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2500);
+    // ANTES: setSaveSuccess(true) se disparaba ANTES de comprobar si había
+    // sesión iniciada, así que si no habías iniciado sesión el botón igual
+    // decía "✓ SINCRONIZADO" — una confirmación falsa, sin guardar nada en
+    // ningún lado. Ahora solo marca éxito si el guardado realmente ocurrió,
+    // y avisa claramente cuando no.
+    if (!currentUser) {
+      sciFiAudio.playBlip();
+      setCloudSyncError('Inicia sesión (pestaña Cuenta) para sincronizar en la nube. Mientras tanto tus cambios solo quedan guardados en este navegador.');
+      setTimeout(() => setCloudSyncError(null), 4500);
+      return;
+    }
 
-    if (currentUser) {
-      try {
-        await setDoc(doc(db, 'users', currentUser.uid, 'settings', 'preferences'), {
-          voiceSettings,
-          securityPermissions,
-          customApps,
-          customFunctions,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (e) {
-        console.error('Error guardando en Firestore:', e);
-      }
+    try {
+      await setDoc(doc(db, 'users', currentUser.uid, 'settings', 'preferences'), {
+        voiceSettings,
+        securityPermissions,
+        customApps,
+        customFunctions,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      sciFiAudio.playConfirmSound();
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    } catch (e) {
+      console.error('Error guardando en Firestore:', e);
+      sciFiAudio.playBlip();
+      setCloudSyncError('No se pudo sincronizar con la nube. Revisa tu conexión e inténtalo de nuevo.');
+      setTimeout(() => setCloudSyncError(null), 4500);
     }
   };
 
@@ -634,6 +647,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {saveSuccess ? '✓ SINCRONIZADO' : 'APLICAR AHORA'}
               </button>
             </div>
+            {cloudSyncError && (
+              <div className="p-2 bg-amber-950/40 border border-amber-500/40 text-amber-300 text-[11px] rounded">
+                ⚠️ {cloudSyncError}
+              </div>
+            )}
           </div>
         )}
 
@@ -1119,6 +1137,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <>
                 <Check className="w-3.5 h-3.5" /> ¡Preferencias guardadas y sincronizadas!
               </>
+            )}
+            {cloudSyncError && (
+              <span className="text-amber-300">⚠️ {cloudSyncError}</span>
             )}
           </div>
 
