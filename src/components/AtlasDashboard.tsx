@@ -5,7 +5,7 @@ import {
   Mic, MicOff, Globe, Code, Image as ImageIcon, Briefcase, ListTodo,
   Terminal, ChevronRight, Check, Sparkles, Radio, Cpu, Wifi,
   Laptop, ExternalLink, RefreshCw, UploadCloud, Layers, User, Bot,
-  QrCode, Smartphone
+  QrCode, Smartphone, Menu
 } from 'lucide-react';
 import { PairMobileModal } from './modals/PairMobileModal';
 import { PWAInstallButton } from './common/PWAInstallButton';
@@ -113,6 +113,11 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [searchInputValue, setSearchInputValue] = useState('');
   const [notificationOpen, setNotificationOpen] = useState(false);
+  // Antes el menú lateral era fijo (w-64) y siempre visible — en un
+  // teléfono se comía casi toda la pantalla, dejando el contenido real
+  // apachurrado en una franja angosta. Ahora en pantallas chicas empieza
+  // oculto y se abre como panel deslizante con el botón de hamburguesa.
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [realStatus, setRealStatus] = useState<any>(null);
   const [isPairModalOpen, setIsPairModalOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -195,8 +200,22 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
 
       {/* ========================================================================= */}
       {/* 1. LEFT NAVIGATION SIDEBAR                                                */}
+      {/* En pantallas grandes (lg+) se ve igual que antes: fija, siempre  */}
+      {/* visible. En móvil vive fuera de pantalla (-translate-x-full) y   */}
+      {/* se desliza al abrirse; el fondo oscuro de abajo la cierra al     */}
+      {/* tocar afuera.                                                    */}
       {/* ========================================================================= */}
-      <aside className="w-64 min-w-[256px] h-full bg-[#04091a]/95 border-r border-[#00f2ff22] flex flex-col justify-between p-3.5 z-20 backdrop-blur-xl">
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm lg:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 min-w-[256px] h-full bg-[#04091a]/95 border-r border-[#00f2ff22] flex flex-col justify-between p-3.5 backdrop-blur-xl overflow-y-auto transition-transform duration-300 ease-out lg:static lg:z-20 lg:translate-x-0 ${
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
         
         {/* Top: Logo & Nav List */}
         <div className="space-y-4">
@@ -231,6 +250,7 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
                   key={item.id}
                   onClick={() => {
                     sciFiAudio.playBlip();
+                    setMobileMenuOpen(false);
                     if (item.id === 'ajustes') {
                       onOpenSettings();
                     } else {
@@ -341,10 +361,22 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">
         
         {/* TOP BAR */}
-        <header className="h-16 border-b border-[#00f2ff22] bg-[#030819]/80 backdrop-blur-xl px-5 flex items-center justify-between gap-4 z-10 shrink-0">
-          
+        <header className="h-16 border-b border-[#00f2ff22] bg-[#030819]/80 backdrop-blur-xl px-3 sm:px-5 flex items-center justify-between gap-2 sm:gap-4 z-10 shrink-0">
+
+          {/* Hamburguesa: solo visible por debajo de lg, abre el menú lateral */}
+          <button
+            onClick={() => {
+              sciFiAudio.playBlip();
+              setMobileMenuOpen(true);
+            }}
+            className="lg:hidden p-2 -ml-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer shrink-0"
+            title="Abrir menú"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
           {/* Left: Avatar & Assistant Online status */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="relative">
               <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#0284c7] via-[#00f2ff] to-[#38bdf8] p-[1.5px] flex items-center justify-center shadow-[0_0_12px_rgba(0,242,255,0.4)]">
                 <div className="w-full h-full bg-[#030816] rounded-full flex items-center justify-center">
@@ -354,14 +386,14 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-[#030816]" />
             </div>
 
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-white">ATLAS</span>
                 <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1 font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> En línea
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 italic">
+              <p className="hidden sm:block text-[10px] text-slate-400 italic">
                 *Siempre listo para ayudarte
               </p>
             </div>
@@ -691,7 +723,7 @@ export const AtlasDashboard: React.FC<AtlasDashboardProps> = ({
           {/* ========================================================================= */}
           {/* CENTER STAGE: 3D HOLOGRAPHIC SPHERE & AUDIO DOCK (cols 4-8.5)              */}
           {/* ========================================================================= */}
-          <div className="xl:col-span-5 flex flex-col items-center justify-between min-h-[460px] relative">
+          <div className="xl:col-span-5 flex flex-col items-center justify-between min-h-[320px] sm:min-h-[380px] xl:min-h-[460px] relative">
             
             {/* Center Core Header Titles */}
             <div className="text-center pt-1 z-10">
