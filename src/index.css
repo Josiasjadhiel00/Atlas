@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/* Soporte para teléfonos con notch/isla dinámica (iPhone) o barra de
+   gestos que se solapa con el contenido. Sin "viewport-fit=cover" (ya
+   agregado en index.html) esto no tendría efecto — los dos van juntos. */
+:root {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html, body, #root {
+  height: 100%;
+}
