@@ -88,7 +88,12 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // La voz de Atlas (edge-tts) es un <audio> que llega después de pedirlo
+      // al servidor. Chromium por defecto exige un clic reciente para
+      // reproducir audio; en una app de escritorio propia no tiene sentido
+      // (Atlas habla en respuesta a tu voz, no siempre a un clic).
+      autoplayPolicy: 'no-user-gesture-required'
     }
   });
 
