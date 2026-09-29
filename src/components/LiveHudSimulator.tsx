@@ -29,7 +29,7 @@ import { MissionTimerAlarm } from './MissionTimerAlarm';
 import { StarkProtocolTasks } from './StarkProtocolTasks';
 import { SettingsModal } from './SettingsModal';
 import { AtlasDashboard } from './AtlasDashboard';
-import { sciFiAudio, speakSpanish } from '../utils/audioSynth';
+import { sciFiAudio, speakSpanish, stopSpeaking, isSpeaking } from '../utils/audioSynth';
 import { useAtlasWebSocket } from '../hooks/useAtlasWebSocket';
 import { auth, db } from '../lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -76,6 +76,11 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
   useEffect(() => {
     setSpeechSynthesisActive(speechSynthesisActiveProp);
   }, [speechSynthesisActiveProp]);
+
+  // Si se silencia la voz de Atlas, cortar de inmediato la que esté sonando.
+  useEffect(() => {
+    if (!speechSynthesisActive) stopSpeaking();
+  }, [speechSynthesisActive]);
   const [activeDeviceView, setActiveDeviceView] = useState<'desktop' | 'mobile'>('desktop');
   
   // Pending confirmation dialog state
@@ -764,9 +769,10 @@ export const LiveHudSimulator: React.FC<LiveHudSimulatorProps> = ({
     }
 
     try {
-      // Interrupción de voz si ATLAS está hablando
-      if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking && voiceSettings.interruptOnSpeech) {
-        window.speechSynthesis.cancel();
+      // Interrupción de voz si ATLAS está hablando (funciona tanto con la voz
+      // edge-tts como con la del navegador de respaldo)
+      if (isSpeaking() && voiceSettings.interruptOnSpeech) {
+        stopSpeaking();
       }
 
       setState('thinking');
