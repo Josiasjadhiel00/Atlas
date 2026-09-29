@@ -3,6 +3,8 @@ import http from "http";
 import path from "path";
 import os from "os";
 import crypto from "crypto";
+import fs from "fs/promises";
+import { EdgeTTS } from "node-edge-tts";
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -438,6 +440,88 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+// =========================================================================
+// VOZ NEURONAL (edge-tts): usa el servicio de texto a voz de Microsoft Edge,
+// sin API key y sin necesitar que el dispositivo tenga voces instaladas.
+// Esto reemplaza al Web Speech API del navegador como voz principal (que
+// dependía de las voces SAPI del sistema operativo y sonaba robótico); el
+// navegador queda solo como respaldo si este servicio no responde.
+// Va bajo /api/*, así que ya exige sesión iniciada (ver middleware arriba).
+// =========================================================================
+const TTS_DEFAULT_VOICE = process.env.ATLAS_TTS_DEFAULT_VOICE?.trim() || "es-MX-JorgeNeural";
+const TTS_MAX_CHARS = 1500;
+// Solo se aceptan voces con forma de "xx-XX-NombreNeural" — evita que
+// alguien inyecte texto raro en el SSML que se manda a Microsoft.
+const TTS_VOICE_PATTERN = /^[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+Neural$/;
+
+function toEdgeRate(multiplier: unknown): string {
+  const n = Number(multiplier);
+  if (!Number.isFinite(n) || n <= 0) return "default";
+  const pct = Math.max(-50, Math.min(50, Math.round((n - 1) * 100)));
+  return `${pct >= 0 ? "+" : ""}${pct}%`;
+}
+
+// El control de tono de Atlas va de 0.5 a 1.5 (1 = normal); edge-tts lo pide
+// en Hz relativos (ej. "-5Hz"). Se limita a ±50 Hz para que nunca suene raro.
+function toEdgePitch(multiplier: unknown): string {
+  const n = Number(multiplier);
+  if (!Number.isFinite(n) || n <= 0) return "default";
+  const hz = Math.max(-50, Math.min(50, Math.round((n - 1) * 50)));
+  return `${hz >= 0 ? "+" : ""}${hz}Hz`;
+}
+
+app.post("/api/tts", async (req, res) => {
+  const text = String(req.body?.text || "").trim().slice(0, TTS_MAX_CHARS);
+  if (!text) {
+    return res.status(400).json({ success: false, error: "Falta el texto a convertir en voz." });
+  }
+
+  const requestedVoice = String(req.body?.voice || "");
+  const voice = TTS_VOICE_PATTERN.test(requestedVoice) ? requestedVoice : TTS_DEFAULT_VOICE;
+  const lang = voice.split("-").slice(0, 2).join("-");
+
+  // Intento 1: con el tono y la velocidad pedidos. Si falla RÁPIDO (señal de
+  // que el servicio rechazó algún valor, no de que no haya conexión), se
+  // reintenta una vez con los valores normales para no dejar a Atlas mudo.
+  const wanted = { rate: toEdgeRate(req.body?.rate), pitch: toEdgePitch(req.body?.pitch) };
+  const attempts = [wanted];
+  if (wanted.rate !== "default" || wanted.pitch !== "default") {
+    attempts.push({ rate: "default", pitch: "default" });
+  }
+
+  const tmpFile = path.join(os.tmpdir(), `atlas-tts-${crypto.randomBytes(8).toString("hex")}.mp3`);
+  try {
+    let lastError: any = null;
+    for (let i = 0; i < attempts.length; i++) {
+      const startedAt = Date.now();
+      try {
+        const tts = new EdgeTTS({
+          voice,
+          lang,
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          rate: attempts[i].rate,
+          pitch: attempts[i].pitch,
+          timeout: 8000
+        });
+        await tts.ttsPromise(text, tmpFile);
+        const audio = await fs.readFile(tmpFile);
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.setHeader("Cache-Control", "no-store");
+        return res.send(audio);
+      } catch (err: any) {
+        lastError = err;
+        const failedFast = Date.now() - startedAt < 4000;
+        console.warn(`[TTS] Intento ${i + 1}/${attempts.length} falló (${attempts[i].rate}, ${attempts[i].pitch}):`, err?.message || err);
+        if (!failedFast) break; // probablemente sin conexión: no tiene sentido reintentar
+      }
+    }
+    console.error("[TTS] No se pudo generar el audio con edge-tts:", lastError?.message || lastError);
+    return res.status(502).json({ success: false, error: "El servicio de voz no respondió. Se usará la voz del navegador." });
+  } finally {
+    fs.unlink(tmpFile).catch(() => {});
+  }
+});
+
 app.get("/api/lan-info", (_req, res) => {
   res.json({
     local_port: PORT,
@@ -789,6 +873,12 @@ app.get("/api/config/models", (_req, res) => {
 // =========================================================================
 app.post("/api/assistant/process", async (req, res) => {
   const startTime = Date.now();
+  // Declarado fuera del try: el bloque catch de más abajo también necesita
+  // leerlo para el mensaje de error. Antes estaba declarado con `let` DENTRO
+  // del try, así que en TypeScript no existía dentro del catch (error de
+  // compilación real, no solo un aviso — tsc lo marca como "Cannot find
+  // name 'activeModelUsed'").
+  let activeModelUsed = "atlas_contingency_engine";
   try {
     const { 
       prompt, 
@@ -823,7 +913,7 @@ app.post("/api/assistant/process", async (req, res) => {
     let confirmationTarget = "";
     let sources: { title: string; url: string }[] = [];
     let hudState = "speaking";
-    let activeModelUsed = "atlas_contingency_engine";
+    activeModelUsed = "atlas_contingency_engine"; // reafirma el valor por defecto para esta ejecución
 
     // Optional Ollama if enabled by user
     if (useOllama) {
@@ -1129,9 +1219,12 @@ ${customFunctionsContext}
             });
 
             const message = completion.choices?.[0]?.message;
-            const call = message?.tool_calls?.[0];
+            // El SDK de OpenAI distingue tool_calls de tipo "function" (los
+            // que declaramos en TOOL_DEFS) de un tipo "custom" más nuevo que
+            // no tiene .function — hay que confirmar el tipo antes de leerlo.
+            const call = message?.tool_calls?.find((tc): tc is Extract<typeof tc, { type: "function" }> => tc.type === "function");
 
-            if (call?.function) {
+            if (call) {
               toolName = call.function.name || "NONE";
               try {
                 toolArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
