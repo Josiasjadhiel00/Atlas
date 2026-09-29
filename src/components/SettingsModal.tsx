@@ -12,7 +12,7 @@ import {
 import { doc, setDoc, getDoc, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../lib/firebase';
 import { VoiceSettings, SecurityPermissions, UserNote, CustomApplication, CustomFunction } from '../types';
-import { sciFiAudio, speakSpanish } from '../utils/audioSynth';
+import { sciFiAudio, speakSpanish, EDGE_SPANISH_VOICES, DEFAULT_EDGE_VOICE, isEdgeVoiceId } from '../utils/audioSynth';
 import { CustomAppsAndFunctionsConfig } from './CustomAppsAndFunctionsConfig';
 
 interface SettingsModalProps {
@@ -61,7 +61,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen, initialTab]);
   const [authMode, setAuthMode] = useState<'google' | 'email_login' | 'email_signup'>('google');
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -120,20 +119,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       console.error('Error escuchando notas de Firestore:', e);
     }
   }, [currentUser]);
-
-  // Obtener voces nativas del sistema
-  useEffect(() => {
-    const updateVoices = () => {
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        const v = window.speechSynthesis.getVoices();
-        setAvailableVoices(v);
-      }
-    };
-    updateVoices();
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = updateVoices;
-    }
-  }, []);
 
   const handleGoogleSignIn = async () => {
     setAuthLoading(true);
@@ -863,21 +848,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               
               {/* Voice Selector */}
               <div className="space-y-1.5 sm:col-span-2">
-                <label className="text-gray-300 font-bold">Voz del Sistema (Síntesis Neural):</label>
+                <label className="text-gray-300 font-bold">Voz de Atlas (edge-tts · síntesis neuronal):</label>
                 <select
-                  value={voiceSettings.voiceURI || ''}
-                  onChange={(e) => onUpdateVoiceSettings({ ...voiceSettings, voiceURI: e.target.value })}
+                  // Si en los ajustes quedó guardada una voz vieja del sistema (de
+                  // antes de edge-tts), se muestra como "predeterminada".
+                  value={isEdgeVoiceId(voiceSettings.voiceURI) ? (voiceSettings.voiceURI as string) : ''}
+                  onChange={(e) => {
+                    const chosen = e.target.value;
+                    onUpdateVoiceSettings({ ...voiceSettings, voiceURI: chosen });
+                    // Vista previa inmediata de la voz elegida.
+                    speakSpanish('Hola, así sueno yo. ¿Qué te parece?', undefined, {
+                      rate: voiceSettings.rate,
+                      pitch: voiceSettings.pitch,
+                      volume: voiceSettings.volume,
+                      voiceURI: chosen
+                    });
+                  }}
                   className="w-full bg-black/80 border border-[#00f2ff44] px-3 py-2 text-xs text-white focus:outline-none focus:border-[#00f2ff] rounded-sm"
                 >
-                  <option value="">-- Voz por defecto en Español --</option>
-                  {availableVoices
-                    .filter((v) => v.lang.startsWith('es') || v.lang.startsWith('en'))
-                    .map((v) => (
-                      <option key={v.voiceURI} value={v.voiceURI} className="bg-slate-900 text-white">
-                        {v.name} ({v.lang})
-                      </option>
-                    ))}
+                  <option value="">
+                    -- Predeterminada ({EDGE_SPANISH_VOICES.find(v => v.id === DEFAULT_EDGE_VOICE)?.label}) --
+                  </option>
+                  {EDGE_SPANISH_VOICES.map((v) => (
+                    <option key={v.id} value={v.id} className="bg-slate-900 text-white">
+                      {v.label}
+                    </option>
+                  ))}
                 </select>
+                <p className="text-[10px] text-gray-500">
+                  La voz se genera en el servidor con las voces neuronales de Microsoft Edge, así suena igual en la PC y en el teléfono.
+                  Si no hay internet, Atlas usa la voz del navegador como respaldo.
+                </p>
               </div>
 
               {/* Pitch Slider */}
